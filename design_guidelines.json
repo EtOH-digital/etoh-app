@@ -1,0 +1,133 @@
+{
+  "theme": "light",
+  "archetype": "Archetype 1 (Organic & Earthy) with SaaS (Swiss) structural elements",
+  "typography": {
+    "fonts": {
+      "heading": "Cormorant Garamond, serif",
+      "body": "Manrope, sans-serif",
+      "mono": "JetBrains Mono, monospace"
+    },
+    "scale": {
+      "h1": "text-4xl tracking-tight leading-none font-bold",
+      "h2": "text-3xl tracking-tight leading-none font-bold",
+      "h3": "text-xl tracking-tight leading-snug font-semibold",
+      "h4": "text-lg tracking-tight font-medium",
+      "body": "text-base leading-relaxed",
+      "small": "text-sm text-stone-500",
+      "overline": "text-xs uppercase tracking-[0.2em] font-bold"
+    }
+  },
+  "colors": {
+    "background": {
+      "primary": "#FAFAF9",
+      "secondary": "#FFFFFF",
+      "tertiary": "#F5F5F4"
+    },
+    "text": {
+      "primary": "#1C1917",
+      "secondary": "#57534E",
+      "inverse": "#FFFFFF"
+    },
+    "brand": {
+      "coach": "#c7263e",
+      "studio": "#1a365d",
+      "pilot": "#4ba3b7"
+    },
+    "ui": {
+      "border": "#E7E5E4",
+      "divider": "#D6D3D1",
+      "success": "#15803d",
+      "warning": "#b45309",
+      "error": "#b91c1c"
+    }
+  },
+  "layout": {
+    "spacing": {
+      "container": "p-4 md:p-8",
+      "section_gap": "gap-8 md:gap-12",
+      "element_gap": "gap-4",
+      "card_padding": "p-6"
+    },
+    "borderRadius": {
+      "card": "rounded-2xl",
+      "button": "rounded-xl",
+      "input": "rounded-xl",
+      "bubble": "rounded-3xl"
+    },
+    "shadows": {
+      "card": "shadow-[0_8px_30px_rgb(0,0,0,0.04)]",
+      "card_hover": "shadow-[0_8px_30px_rgb(0,0,0,0.08)]",
+      "floating_nav": "shadow-[0_-4px_24px_rgba(0,0,0,0.06)]"
+    }
+  },
+  "components": {
+    "cards": {
+      "base": "bg-white border border-stone-200 rounded-2xl p-6 shadow-card transition-shadow hover:shadow-card_hover",
+      "coach_variant": "border-l-4 border-l-[#c7263e]",
+      "studio_variant": "border-l-4 border-l-[#1a365d]",
+      "pilot_variant": "border-l-4 border-l-[#4ba3b7]"
+    },
+    "buttons": {
+      "primary": "bg-stone-900 text-white rounded-xl px-6 py-3 font-semibold transition-all hover:bg-stone-800 active:scale-95",
+      "coach": "bg-[#c7263e] text-white rounded-xl px-6 py-3 font-semibold transition-all hover:bg-[#a61c31] active:scale-95",
+      "studio": "bg-[#1a365d] text-white rounded-xl px-6 py-3 font-semibold transition-all hover:bg-[#11243f] active:scale-95",
+      "pilot": "bg-[#4ba3b7] text-white rounded-xl px-6 py-3 font-semibold transition-all hover:bg-[#3d8697] active:scale-95",
+      "ghost": "bg-transparent text-stone-600 hover:bg-stone-100 rounded-xl px-6 py-3 font-medium transition-all"
+    },
+    "inputs": {
+      "text": "w-full border border-stone-200 bg-stone-50 rounded-xl px-4 py-3 focus:ring-2 focus:ring-stone-400 focus:border-transparent transition-all outline-none",
+      "chat": "w-full border border-stone-200 bg-white rounded-full px-6 py-4 pr-14 shadow-sm focus:ring-2 focus:ring-stone-400 focus:border-transparent transition-all outline-none"
+    },
+    "chat_bubbles": {
+      "user": "bg-stone-100 text-stone-900 rounded-3xl rounded-br-none px-5 py-3 max-w-[85%] self-end",
+      "ai_coach": "bg-white border border-stone-200 text-stone-900 rounded-3xl rounded-bl-none px-5 py-3 max-w-[85%] self-start shadow-sm",
+      "ai_studio": "bg-white border border-stone-200 text-stone-900 rounded-3xl rounded-bl-none px-5 py-3 max-w-[85%] self-start shadow-sm",
+      "ai_pilot": "bg-white border border-stone-200 text-stone-900 rounded-3xl rounded-bl-none px-5 py-3 max-w-[85%] self-start shadow-sm"
+    },
+    "bottom_nav": {
+      "container": "fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-xl border-t border-stone-200 pb-[env(safe-area-inset-bottom,20px)] pt-2 px-6 flex justify-between items-center z-50",
+      "item": "flex flex-col items-center gap-1 p-2 text-stone-400 transition-colors",
+      "item_active_coach": "text-[#c7263e]",
+      "item_active_studio": "text-[#1a365d]",
+      "item_active_pilot": "text-[#4ba3b7]",
+      "item_active_home": "text-stone-900"
+    }
+  },
+  "animations": {
+    "page_transition": "animate-in fade-in slide-in-from-bottom-4 duration-300 ease-out",
+    "card_stagger": "animate-in fade-in slide-in-from-bottom-4 duration-500 ease-out fill-mode-both",
+    "chat_stream": "animate-in fade-in duration-200"
+  },
+  "media": {
+    "images": {
+      "splash_bg": {
+        "url": "https://images.unsplash.com/photo-1506377247377-2a5b3b417ebb?ixlib=rb-4.0.3&auto=format&fit=crop&w=1080&q=80",
+        "description": "Elegant wine glass on a modern table setting"
+      },
+      "profile_header": {
+        "url": "https://images.unsplash.com/photo-1595856942699-231a4cc6dc24?ixlib=rb-4.0.3&auto=format&fit=crop&w=1080&q=80",
+        "description": "Minimalist vineyard architecture at sunset"
+      },
+      "avatar_placeholder": {
+        "url": "https://images.unsplash.com/photo-1568602471122-7832951cc4c5?ixlib=rb-4.0.3&auto=format&fit=crop&w=150&q=80",
+        "description": "Professional user avatar"
+      }
+    },
+    "icons": {
+      "library": "lucide-react",
+      "instructions": "Use lucide-react for all icons. Keep stroke-width at 1.5 for a premium, lightweight feel."
+    }
+  },
+  "instructions_to_main_agent": [
+    "Design specifically for a mobile-first experience. Enforce a max-width of 'max-w-md mx-auto' for desktop views (and hide scrolling overflow on the body) to simulate the app structure, with a fixed bottom navigation bar.",
+    "Ensure the bottom navigation respects safe areas on mobile devices via padding-bottom.",
+    "Apply 'Cormorant Garamond' strictly for headers and display text to evoke wine industry sophistication. Use 'Manrope' for standard UI text.",
+    "Avoid clutter. Rely heavily on white space (generous padding) and clear visual hierarchy rather than borders.",
+    "For the Coach tab, use the red brand color (#c7263e) for primary actions, active nav state, and highlights.",
+    "For the Studio tab, use the dark blue brand color (#1a365d - distinct from pilot) for primary actions, active nav state, and highlights.",
+    "For the Pilot tab, use the light blue brand color (#4ba3b7) for primary actions, active nav state, and highlights.",
+    "Implement 'data-testid' on all interactive elements (buttons, inputs, bottom nav items) using kebab-case role-based naming (e.g., 'data-testid=\"nav-coach-button\"').",
+    "Ensure all text meets APCA/WCAG contrast ratios against the stone-50 background.",
+    "Forms and chats should use clean, rounded-xl/rounded-3xl inputs with subtle shadows instead of heavy thick borders."
+  ]
+}
