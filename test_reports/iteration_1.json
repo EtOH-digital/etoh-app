@@ -1,0 +1,45 @@
+{
+  "summary": "First iteration testing of EtOH (AI Commercial Director for wines & spirits). BACKEND: 22/22 pytest tests passing (100%) covering signup, login, /auth/me, profile update, home recommendations (AI 3 actions), coach multi-turn chat + sessions list, studio generate (linkedin/premium), studio history, pilot plan (5 targets + 4 tasks), pilot history, logout, _id exclusion, 401 unauth checks. FRONTEND (Expo web preview, 420x900 mobile viewport): full end-to-end happy path validated — login screen renders, password login works, Home shows greeting + 3 module tiles + 3 AI recommendations with module color borders, Coach tab sends a message and receives a structured Markdown reply (~10s), Studio LinkedIn premium template generates content with Copy/Share, Pilot returns 5 target cards + 4 task rows, Profile fields editable + logout returns to login screen, all 5 bottom tabs navigate correctly. No mocked APIs — all AI calls hit real OpenAI gpt-4o-mini via Emergent Universal Key. No deprecated expo packages detected (no expo-av / expo-barcode-scanner / expo-background-fetch). One minor RN-web console warning: 'props.pointerEvents is deprecated' (originates from RN/Expo internals, not app code).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/auth/logout", "issue": "Logout endpoint only deletes Google session tokens from user_sessions collection; JWT tokens remain valid until natural expiry (no blacklist). Acceptable for MVP but documented behavior should be confirmed."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Post-logout home recommendations call", "issue": "After logout, Home screen briefly fires POST /api/home/recommendations causing a 401 (visible in console). Likely a race — token cleared but home effect runs once more before unmount. Cosmetic only.", "affected_testIDs": ["home-recommendations"]}
+    ],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "expo-router/RN-web", "issue": "Console warning: 'props.pointerEvents is deprecated. Use style.pointerEvents'. Coming from RN web internals — monitor on next Expo SDK upgrade."}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_etoh_api.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "(Optional) Split server.py (~782 lines, just over 700-line guideline) into auth/coach/studio/pilot/home routers for maintainability.",
+    "(Optional) Guard the Home recommendations effect against running after sign-out to avoid 401 noise in logs.",
+    "(Optional) Decide whether JWT logout should be a real revocation (blacklist or short-lived + refresh) for production."
+  ],
+  "critical_code_review_comments": [
+    "server.py monolithic at 782 lines (slightly above 700-line guideline); split into routers/services for future scale.",
+    "Coach endpoint replays last user message via send_message inside a `for` loop with an immediate `break` (dead code lines 509-516) — already bypassed by the simpler concat-history path below it; safe to delete.",
+    "All MongoDB reads correctly use {'_id': 0} projection — no ObjectId leakage observed.",
+    "EMERGENT_LLM_KEY and JWT_SECRET correctly loaded from .env, no hardcoded credentials in code."
+  ],
+  "updated_files": [
+    "/app/backend/tests/conftest.py",
+    "/app/backend/tests/test_etoh_api.py"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "seed_data_creation": "Created one transient signup user TEST_signup_<uuid>@etoh-test.com via test_signup_new_user. Seeded user vigneron@etoh-test.com pre-existed and was used for all authenticated tests; profile was updated to Domaine Test/Bordeaux during test_update_profile_persists.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend public URL: https://ai-coach-autopilot.preview.emergentagent.com (all routes under /api). Seeded credentials: vigneron@etoh-test.com / WineLover2026. Pytest suite at /app/backend/tests/test_etoh_api.py covers all 12 backend endpoints + auth guards + _id exclusion. AI endpoints (home recs / coach / studio / pilot) each take 5-20s — use timeout >=60s. Frontend testIDs follow pattern: auth-*, nav-{tab}-button, home-tile-{module}, home-rec-{i}, coach-input/coach-send/coach-msg-{i}/coach-reset, studio-template-{id}/studio-brief-input/studio-tone-{id}/studio-generate/studio-output/studio-copy/studio-share, pilot-target-{id}/pilot-region-input/pilot-product-input/pilot-launch/pilot-plan/pilot-target-card-{i}/pilot-task-{i}, profile-business-name/profile-type-{id}/profile-region/profile-products/profile-role/profile-lang-fr|en/profile-save/profile-logout. Mobile-first viewport 420x900.",
+  "rca_of_issue": "Original concern in review_request: 'headless screenshots showed only loading state'. Root cause: the Expo web bundle takes 6-10s to bundle+hydrate on cold start (Metro builds 900 modules on first request). Solution applied in test: wait_for_selector with 30s timeout on '[data-testid=\"auth-tab-login\"]' after navigation — login screen then appears reliably and full E2E flow completes. No code change needed; this is normal Expo web cold-start behavior. Recommend documenting expected cold-start latency, or pre-warming the bundle in CI."
+}
