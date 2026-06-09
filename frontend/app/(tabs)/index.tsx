@@ -37,6 +37,7 @@ export default function Home() {
   const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
+    if (!user) return;
     try {
       const lang = user?.business_profile?.language || "fr";
       const data = await apiFetch<{ recommendations: Rec[] }>("/home/recommendations", {
@@ -50,7 +51,7 @@ export default function Home() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [user?.business_profile?.language]);
+  }, [user]);
 
   useEffect(() => {
     load();
