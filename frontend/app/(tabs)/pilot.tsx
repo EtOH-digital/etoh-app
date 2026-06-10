@@ -66,6 +66,7 @@ export default function PilotScreen() {
   const [activeChannel, setActiveChannel] = useState<Channel | null>(null);
   const [draftLoading, setDraftLoading] = useState(false);
   const [draft, setDraft] = useState<Draft | null>(null);
+  const [editedTo, setEditedTo] = useState("");
   const [editedSubject, setEditedSubject] = useState("");
   const [editedBody, setEditedBody] = useState("");
   const [sending, setSending] = useState(false);
@@ -100,6 +101,7 @@ export default function PilotScreen() {
     setDraft(null);
     setActionStatus(null);
     setDraftLoading(true);
+    setEditedTo(target.email || "");
     try {
       const lang = user?.business_profile?.language || "fr";
       const data = await apiFetch<{ subject?: string | null; body: string }>("/pilot/draft", {
@@ -134,6 +136,11 @@ export default function PilotScreen() {
       setActionStatus("⚠️ Crédits insuffisants. Profil → ajoutez des crédits.");
       return;
     }
+    const to = (editedTo || "").trim();
+    if (!to || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+      setActionStatus("⚠️ Adresse email du destinataire invalide. Corrigez le champ « À » et réessayez.");
+      return;
+    }
     setSending(true);
     setActionStatus(null);
     try {
@@ -144,7 +151,7 @@ export default function PilotScreen() {
           body: JSON.stringify({
             search_id: result.search_id,
             target_id: activeTarget.id,
-            to_email: activeTarget.email,
+            to_email: to,
             to_name: activeTarget.name,
             subject: editedSubject,
             body: editedBody,
@@ -155,10 +162,15 @@ export default function PilotScreen() {
       setActionStatus(
         r.mocked
           ? `✓ Email simulé (Resend non encore activé). Crédits restants : ${r.credits_remaining}`
-          : `✓ Email envoyé à ${activeTarget.email}. Crédits restants : ${r.credits_remaining}`
+          : `✓ Email envoyé à ${to}. Crédits restants : ${r.credits_remaining}`
       );
     } catch (e: any) {
-      setActionStatus(`Erreur : ${e.message}`);
+      // Pretty-print common errors
+      let msg = e?.message || "Erreur";
+      if (msg.includes("value is not a valid email") || msg.toLowerCase().includes("email")) {
+        msg = "Adresse email invalide. Corrigez le champ « À » et réessayez.";
+      }
+      setActionStatus(`⚠️ ${msg}`);
     } finally {
       setSending(false);
     }
@@ -430,6 +442,17 @@ export default function PilotScreen() {
               >
                 {activeChannel === "email" && (
                   <>
+                    <Text style={s.fieldLabel}>À</Text>
+                    <TextInput
+                      testID="pilot-email-to"
+                      style={s.input}
+                      value={editedTo}
+                      onChangeText={setEditedTo}
+                      placeholder="contact@exemple.com"
+                      placeholderTextColor={Colors.textMuted}
+                      autoCapitalize="none"
+                      keyboardType="email-address"
+                    />
                     <Text style={s.fieldLabel}>Objet</Text>
                     <TextInput
                       testID="pilot-email-subject"

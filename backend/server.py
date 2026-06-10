@@ -923,9 +923,24 @@ Mark ALL contact info as "to validate" — do not invent real existing accounts.
         targets = []
         interpretation = ""
 
-    # Ensure stable ids
+    # Ensure stable ids and sanitise AI-generated email/phone/linkedin fields
+    # (the model sometimes appends "(suggestion à valider)" inline which breaks
+    # EmailStr validation downstream).
+    import re as _re
+
+    def _strip_parens(value: Optional[str]) -> Optional[str]:
+        if not value or not isinstance(value, str):
+            return value
+        # Remove any trailing parenthetical comment + extra whitespace
+        cleaned = _re.sub(r"\s*\([^)]*\)\s*$", "", value).strip()
+        return cleaned
+
     for i, t in enumerate(targets):
         t["id"] = f"t{i+1}"
+        t["email"] = _strip_parens(t.get("email"))
+        t["phone"] = _strip_parens(t.get("phone"))
+        t["linkedin_url"] = _strip_parens(t.get("linkedin_url"))
+        t["contact_name"] = _strip_parens(t.get("contact_name"))
 
     search_id = f"sch_{uuid.uuid4().hex[:12]}"
     await db.pilot_searches.insert_one({
