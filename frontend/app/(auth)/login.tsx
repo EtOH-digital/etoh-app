@@ -9,10 +9,11 @@ import {
   Platform,
   ScrollView,
   ActivityIndicator,
+  Image,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { Colors, Spacing, Radii } from "@/src/theme";
+import { Colors, Spacing, Radii, Fonts } from "@/src/theme";
 import { useAuth } from "@/src/auth/AuthContext";
 
 export default function Login() {
@@ -68,10 +69,11 @@ export default function Login() {
           showsVerticalScrollIndicator={false}
         >
           <View style={s.brand}>
-            <View style={s.logoMark}>
-              <Text style={s.logoText}>E</Text>
-            </View>
-            <Text style={s.logoTitle}>EtOH</Text>
+            <Image
+              source={require("../../assets/brand/studio.png")}
+              style={s.logoImg}
+              resizeMode="contain"
+            />
             <Text style={s.tagline}>Votre Directeur Commercial IA{"\n"}vins & spiritueux</Text>
           </View>
 
@@ -181,14 +183,8 @@ const s = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bg },
   scroll: { flexGrow: 1, justifyContent: "center", padding: Spacing.lg, maxWidth: 480, width: "100%", alignSelf: "center" },
   brand: { alignItems: "center", marginBottom: Spacing.xl },
-  logoMark: {
-    width: 64, height: 64, borderRadius: Radii.lg,
-    backgroundColor: Colors.coach, alignItems: "center", justifyContent: "center",
-    marginBottom: Spacing.md,
-  },
-  logoText: { color: "#fff", fontSize: 32, fontWeight: "700", fontFamily: "serif" },
-  logoTitle: { fontSize: 36, fontWeight: "700", color: Colors.text, fontFamily: "serif", letterSpacing: -0.5 },
-  tagline: { fontSize: 14, color: Colors.textSecondary, textAlign: "center", marginTop: Spacing.sm, lineHeight: 20 },
+  logoImg: { width: 200, height: 110, marginBottom: Spacing.sm },
+  tagline: { fontFamily: Fonts.body, fontSize: 14, color: Colors.textSecondary, textAlign: "center", marginTop: Spacing.sm, lineHeight: 20 },
   card: {
     backgroundColor: Colors.bgSecondary,
     borderRadius: Radii.xl,
@@ -198,19 +194,20 @@ const s = StyleSheet.create({
   tabs: { flexDirection: "row", backgroundColor: Colors.bgTertiary, borderRadius: Radii.md, padding: 4, marginBottom: Spacing.lg },
   tab: { flex: 1, paddingVertical: 10, alignItems: "center", borderRadius: Radii.sm },
   tabActive: { backgroundColor: Colors.bgSecondary },
-  tabText: { fontSize: 14, color: Colors.textSecondary, fontWeight: "500" },
-  tabTextActive: { color: Colors.text, fontWeight: "600" },
+  tabText: { fontSize: 14, color: Colors.textSecondary, fontWeight: "500", fontFamily: Fonts.body },
+  tabTextActive: { color: Colors.text, fontWeight: "700", fontFamily: Fonts.bodyMedium },
   input: {
     borderWidth: 1, borderColor: Colors.border, borderRadius: Radii.md,
     paddingHorizontal: Spacing.md, paddingVertical: 14, marginBottom: Spacing.sm,
     fontSize: 15, color: Colors.text, backgroundColor: Colors.bgSecondary,
+    fontFamily: Fonts.body,
   },
-  err: { color: Colors.error, fontSize: 13, marginTop: Spacing.xs, marginBottom: Spacing.xs },
+  err: { color: Colors.error, fontSize: 13, marginTop: Spacing.xs, marginBottom: Spacing.xs, fontFamily: Fonts.body },
   primaryBtn: {
-    backgroundColor: Colors.text, borderRadius: Radii.md,
+    backgroundColor: Colors.brandPrimary, borderRadius: Radii.md,
     paddingVertical: 14, alignItems: "center", marginTop: Spacing.sm,
   },
-  primaryBtnText: { color: "#fff", fontWeight: "600", fontSize: 15 },
+  primaryBtnText: { color: "#fff", fontWeight: "700", fontSize: 15, fontFamily: Fonts.bodyMedium },
   divider: { flexDirection: "row", alignItems: "center", marginVertical: Spacing.md },
   dividerLine: { flex: 1, height: 1, backgroundColor: Colors.border },
   dividerText: { marginHorizontal: Spacing.md, color: Colors.textMuted, fontSize: 12 },

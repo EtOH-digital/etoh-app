@@ -11,6 +11,7 @@ export type User = {
   name?: string | null;
   picture?: string | null;
   providers: string[];
+  credits?: number;
   business_profile?: {
     business_name?: string;
     business_type?: string;

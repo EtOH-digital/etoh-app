@@ -7,12 +7,13 @@ import {
   StyleSheet,
   ActivityIndicator,
   RefreshControl,
+  Image,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
-import { Colors, Spacing, Radii } from "@/src/theme";
+import { Colors, Spacing, Radii, Fonts } from "@/src/theme";
 import { useAuth } from "@/src/auth/AuthContext";
 import { apiFetch } from "@/src/api/client";
 
@@ -76,6 +77,17 @@ export default function Home() {
         showsVerticalScrollIndicator={false}
       >
         <View style={s.header}>
+          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+            <Image
+              source={require("../../assets/brand/studio.png")}
+              style={{ width: 84, height: 40 }}
+              resizeMode="contain"
+            />
+            <View style={s.credits} testID="home-credits">
+              <Ionicons name="flash" size={12} color={Colors.brandPrimary} />
+              <Text style={s.creditsText}>{user?.credits ?? 0} crédits</Text>
+            </View>
+          </View>
           <Text style={s.greeting}>
             {greeting}
             {firstName ? `, ${firstName}` : ""}
@@ -181,10 +193,17 @@ function ModuleTile({
 const s = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bg },
   scroll: { padding: Spacing.lg, paddingBottom: 60 },
-  header: { marginBottom: Spacing.lg },
-  greeting: { fontSize: 14, color: Colors.textSecondary, marginBottom: Spacing.xs },
-  headline: { fontSize: 28, fontWeight: "700", color: Colors.text, fontFamily: "serif", letterSpacing: -0.5, lineHeight: 32 },
-  sub: { fontSize: 14, color: Colors.textSecondary, marginTop: 4 },
+  header: { marginBottom: Spacing.lg, paddingTop: Spacing.sm },
+  credits: {
+    flexDirection: "row", alignItems: "center", gap: 4,
+    paddingHorizontal: 10, paddingVertical: 5,
+    borderWidth: 1, borderColor: Colors.brandPrimary,
+    backgroundColor: Colors.studioSoft, borderRadius: Radii.pill,
+  },
+  creditsText: { color: Colors.brandPrimary, fontFamily: Fonts.bodyMedium, fontWeight: "700", fontSize: 12 },
+  greeting: { fontFamily: Fonts.body, fontSize: 14, color: Colors.textSecondary, marginBottom: Spacing.xs, marginTop: Spacing.md },
+  headline: { fontFamily: Fonts.headingBold, fontSize: 28, color: Colors.text, letterSpacing: -0.5, lineHeight: 34 },
+  sub: { fontFamily: Fonts.body, fontSize: 14, color: Colors.textSecondary, marginTop: 4 },
   modulesRow: { flexDirection: "row", gap: Spacing.sm, marginBottom: Spacing.xl },
   tile: { flex: 1, borderRadius: Radii.lg, padding: Spacing.md, alignItems: "flex-start" },
   tileMark: { width: 32, height: 32, borderRadius: 8, alignItems: "center", justifyContent: "center", marginBottom: Spacing.sm },

@@ -1,0 +1,50 @@
+{
+  "summary": "Iteration 2 testing of EtOH Pilot v2 (AI search + 3 outbound channels) + credits system. BACKEND: 16/16 pytest tests passed (100%) in /app/backend/tests/test_pilot_v2.py covering /credits/me (shape + 401), /pilot/search (8 targets with required fields + free + auth), /pilot/draft (email has subject, whatsapp/linkedin have null subject, 404 on bad target, free), /pilot/send-email (mocked=true, deducts exactly 1 credit, 402 when credits=0), /pilot/open-channel whatsapp+linkedin (deducts 1 credit each, 402 when 0), /pilot/searches history, /pilot/actions log (send_email + open_whatsapp + open_linkedin present, cost=1, no _id leak). FRONTEND (mobile 420x900): login renders the EtOH Studio logo image (assets/brand/studio.png), password login succeeds, home shows 'X crédits' badge with bolt icon, Pilot screen shows teal logo + credits badge + 'Trouvez vos prochains clients' title + search input + 4 suggestion chips. After selecting a suggestion and clicking search, the interpretation banner + 8 target cards (t1..t8) render correctly with name/type/city/snippet/contact/tags and 3 action buttons each. Email modal shows AI-drafted Subject + Body + 'Coût : 1 crédit (0.099€)' label + Send button; WhatsApp modal shows body only + pilot-open-whatsapp; LinkedIn modal shows body only + pilot-open-linkedin. Fonts loaded: headings use ExpletusSans_700Bold, body text uses Lato_400Regular (verified via getComputedStyle). ONE CRITICAL UX BUG FOUND: clicking Send Email returns HTTP 422 because the AI puts the disclaimer suffix INSIDE the email field (e.g. 'julien.martin@cavedespapilles.com (suggestion à valider)'), which fails Pydantic EmailStr validation. Credits are correctly NOT deducted on 422 (validation rejects before _consume_credits), but the user sees a raw Pydantic error in the modal. WhatsApp/LinkedIn paths are not affected. Carryover warning from iteration 1: 'props.pointerEvents is deprecated' (RN-web internal, not app code).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/pilot/search", "issue": "AI sometimes embeds the disclaimer text ('(suggestion à valider)') INSIDE the email field rather than alongside it, producing strings like 'julien.martin@cavedespapilles.com (suggestion à valider)' which are not valid RFC emails. This then breaks /pilot/send-email with 422 when the frontend forwards target.email verbatim. Fix: (a) post-process targets in pilot_search to strip parenthetical suffixes from the email field, OR (b) ask the AI to put the disclaimer in a separate 'email_note' field, OR (c) loosen the PilotSendEmailIn.to_email to str and validate/sanitise server-side. Reference: /app/backend/server.py lines 843-945 (pilot_search) and 828-834 (PilotSendEmailIn)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "PilotScreen email modal", "issue": "Send Email returns 422 and shows the raw Pydantic JSON error text in the status area because target.email from the AI search includes the suffix '(suggestion à valider)'. The frontend should sanitise target.email before sending (strip parenthetical content and surrounding whitespace) and/or pre-fill an editable 'À' input so the user can correct invalid AI emails before sending. Reference: /app/frontend/app/(tabs)/pilot.tsx — sendEmail handler passes target.email straight through.", "testID": "pilot-send-email", "priority": "HIGH"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Pilot email modal", "issues": ["Error status area renders the raw Pydantic error JSON (multi-line stack-style) rather than a friendly 'Adresse email invalide, veuillez la corriger' message. Hard to read on mobile."]}
+    ],
+    "react_native_issues": [
+      {"component": "expo-router/RN-web", "issue": "Console warning 'props.pointerEvents is deprecated. Use style.pointerEvents' originates from RN/Expo internals (same as iteration 1). Not from app code."}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_pilot_v2.py",
+    "/app/backend/tests/test_etoh_api.py",
+    "/app/test_reports/pytest/pilot_v2_results.xml"
+  ],
+  "action_items": [
+    "HIGH: Sanitise target.email coming from /pilot/search before it reaches /pilot/send-email. Recommended: strip everything from the first '(' or whitespace onward in pilot_search() post-processing (server.py ~ line 927). This unblocks the end-to-end Send flow.",
+    "HIGH: In the Pilot email modal, surface a human-readable error (e.g. 'Adresse email invalide — corrigez-la avant l\\'envoi') and ideally expose an editable 'À' (to_email) input prefilled with the sanitised email so users can fix it.",
+    "MEDIUM: Add a clamp/server-side sanitisation in PilotSendEmailIn — if to_email contains parens or spaces, strip the trailing annotation before EmailStr validation (or accept str and validate manually).",
+    "LOW: 'Recommandées par l'IA pour vous' subtitle on Home is rendering with system sans-serif rather than Lato — minor consistency miss vs the rest of the body copy."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now ~1178 lines — well above the 700-line guideline. Strongly recommend splitting into routers: auth, profile, home, coach, studio, pilot, credits.",
+    "_consume_credits is atomic via find_one_and_update with $gte filter — correct concurrency-safe pattern. Returns 402 on insufficient credits as specified.",
+    "Pilot search free, send/open paid — billing logic matches spec. Credits are correctly NOT consumed when the request fails Pydantic validation (422 happens before _consume_credits).",
+    "All Mongo reads use {'_id': 0} projection — no ObjectId leakage detected in /pilot/searches, /pilot/actions, /credits/me responses.",
+    "RESEND_API_KEY is absent from backend/.env as documented — send-email correctly returns mocked:true and still deducts 1 credit. By design.",
+    "Pilot prompt explicitly tells the AI to mark coordinates 'à valider' but doesn't enforce a clean email field — the AI complies by inlining the disclaimer in the email string. Root cause of the 422 bug above."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_pilot_v2.py (new)",
+    "/app/test_reports/pytest/pilot_v2_results.xml (new)"
+  ],
+  "success_rate": {"backend": "100% (16/16 new + 22/22 carryover)", "frontend": "~85% (all UI/navigation/modal/fonts/credits OK; Send Email path broken by AI-data validation)"},
+  "seed_data_creation": "Used pre-seeded vigneron@etoh-test.com. Programmatically adjusted user.credits via direct Mongo ($set) between tests to validate the 402 boundary without burning 100 sends. Restored credits to 100 at the end of the run.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend URL: https://ai-coach-autopilot.preview.emergentagent.com. Run: `pytest /app/backend/tests/test_pilot_v2.py -v` (uses MongoClient on localhost:27017, db etoh_db, to flip credits between tests). New Pilot v2 testIDs (frontend): pilot-credits, pilot-search-input, pilot-search-btn, pilot-suggest-0..3, pilot-results, pilot-target-t1..t8, pilot-act-email-{tid}/pilot-act-whatsapp-{tid}/pilot-act-linkedin-{tid}, pilot-close-modal, pilot-email-subject, pilot-msg-body, pilot-send-email, pilot-open-whatsapp, pilot-open-linkedin, pilot-action-status. Home: home-credits. RESEND_API_KEY is intentionally UNSET — send-email is MOCKED but credits still deduct. Mongo helper to reset credits: db.users.update_one({'user_id': uid}, {'$set': {'credits': N}}).",
+  "rca_of_issue": "BUG: /api/pilot/send-email returns 422 from the UI. REPRODUCTION: 1) Login, 2) Pilot tab, 3) Click any suggestion chip, 4) Click search, 5) Wait for 8 targets, 6) Click Email on any card, 7) Click 'Envoyer l\\'email'. EXPECTED: 200 ok mocked:true and credits -1. OBSERVED: 422 with Pydantic 'value is not a valid email address' because target.email contains the literal substring ' (suggestion à valider)' that the AI added per the prompt instructions ('Marque CLAIREMENT toutes les coordonnées comme à valider'). The frontend passes target.email verbatim into PilotSendEmailIn.to_email which is typed EmailStr and rejects. MITIGATION (server-side, simplest): after json.loads in pilot_search, run targets = [{**t, 'email': re.sub(r'\\s*\\(.*?\\)\\s*', '', t.get('email','')).strip()} for t in targets]. ALTERNATIVE (frontend): in pilot.tsx sendEmail handler, sanitise activeTarget.email before POSTing. Either fix unblocks the full happy path without weakening EmailStr validation."
+}

@@ -47,6 +47,16 @@ JWT_EXP_MINUTES = int(os.environ.get("JWT_EXP_MINUTES", "10080"))
 LLM_PROVIDER = "openai"
 LLM_MODEL = "gpt-4o-mini"
 
+# --- Credits & pricing ---
+INITIAL_FREE_CREDITS = 100
+CREDIT_PRICE_EUR = 0.099
+ACTION_COST = 1  # credits per outbound action (email / whatsapp / linkedin)
+
+# --- Resend (email) configuration (MOCKED until DNS + API key are provided) ---
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+RESEND_FROM_EMAIL = os.environ.get("RESEND_FROM_EMAIL", "noreply@pilot.etoh.fr")
+RESEND_FROM_NAME = os.environ.get("RESEND_FROM_NAME", "EtOH Pilot")
+
 EMERGENT_SESSION_API = "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -84,6 +94,7 @@ class UserOut(BaseModel):
     picture: Optional[str] = None
     providers: List[str] = []
     business_profile: Optional[Dict[str, Any]] = None
+    credits: int = 0
 
 
 class TokenOut(BaseModel):
@@ -162,6 +173,7 @@ def _serialize_user(doc: Dict[str, Any]) -> UserOut:
         picture=doc.get("picture"),
         providers=doc.get("providers", []),
         business_profile=doc.get("business_profile"),
+        credits=int(doc.get("credits", 0)),
     )
 
 
@@ -306,6 +318,7 @@ async def signup(payload: SignupIn):
             "password_hash": password_hash,
             "providers": ["password"],
             "business_profile": {"language": "fr"},
+            "credits": INITIAL_FREE_CREDITS,
             "created_at": _now(),
         }
         await db.users.insert_one(doc)
@@ -366,6 +379,7 @@ async def google_session(payload: GoogleSessionIn):
             "picture": picture,
             "providers": ["google"],
             "business_profile": {"language": "fr"},
+            "credits": INITIAL_FREE_CREDITS,
             "created_at": _now(),
         })
 
@@ -752,10 +766,392 @@ async def pilot_history(current_user: Dict[str, Any] = Depends(get_current_user)
     return {"items": items}
 
 
+
+
+# ---------- Credits ----------
+class CreditsOut(BaseModel):
+    credits: int
+    credit_price_eur: float
+    action_cost: int
+
+
+@api.get("/credits/me", response_model=CreditsOut)
+async def credits_me(current_user: Dict[str, Any] = Depends(get_current_user)):
+    return CreditsOut(
+        credits=int(current_user.get("credits", 0)),
+        credit_price_eur=CREDIT_PRICE_EUR,
+        action_cost=ACTION_COST,
+    )
+
+
+async def _consume_credits(user_id: str, amount: int) -> int:
+    """Atomically deduct credits. Raises 402 if insufficient. Returns remaining."""
+    result = await db.users.find_one_and_update(
+        {"user_id": user_id, "credits": {"$gte": amount}},
+        {"$inc": {"credits": -amount}},
+        return_document=True,
+        projection={"_id": 0, "credits": 1},
+    )
+    if not result:
+        raise HTTPException(
+            status_code=402,
+            detail="Crédits insuffisants. Rechargez votre compte pour continuer.",
+        )
+    return int(result["credits"])
+
+
+async def _log_action(user_id: str, action: str, payload: Dict[str, Any], cost: int):
+    await db.action_log.insert_one({
+        "id": f"act_{uuid.uuid4().hex[:12]}",
+        "user_id": user_id,
+        "action": action,
+        "cost": cost,
+        "payload": payload,
+        "created_at": _now(),
+    })
+
+
+# ---------- Pilot v2: search + draft + send ----------
+class PilotSearchIn(BaseModel):
+    query: str  # e.g. "cavistes paris vins nature"
+    language: Literal["fr", "en"] = "fr"
+
+
+class PilotDraftIn(BaseModel):
+    search_id: str
+    target_id: str
+    channel: Literal["email", "whatsapp", "linkedin"]
+    custom_note: Optional[str] = None
+    language: Literal["fr", "en"] = "fr"
+
+
+class PilotSendEmailIn(BaseModel):
+    target_id: str
+    search_id: str
+    to_email: EmailStr
+    to_name: str
+    subject: str
+    body: str
+
+
+class PilotOpenChannelIn(BaseModel):
+    target_id: str
+    search_id: str
+    channel: Literal["whatsapp", "linkedin"]
+
+
+@api.post("/pilot/search")
+async def pilot_search(payload: PilotSearchIn,
+                       current_user: Dict[str, Any] = Depends(get_current_user)):
+    """AI-driven contact suggestion. Free (no credit cost) — only outbound actions cost credits.
+
+    NOTE: This is an AI-generated list of plausible contacts. Names, emails,
+    phones and LinkedIn URLs are SUGGESTIONS to be validated by the user.
+    """
+    bp = current_user.get("business_profile") or {}
+    lang = payload.language
+
+    prompt_fr = f"""Tu es EtOH Pilot. L'utilisateur cherche des contacts commerciaux pour vendre ses {bp.get('main_products') or 'vins/spiritueux'}.
+Profil utilisateur : {bp.get('business_name') or '—'} | Région : {bp.get('region') or '—'}.
+
+Requête : "{payload.query}"
+
+Génère 8 contacts plausibles correspondant à la requête, sous forme de JSON STRICT (sans markdown, sans ```).
+Structure :
+{{
+  "interpretation": "Tu cherches X à Y, je vais cibler Z (1 phrase)",
+  "targets": [
+    {{
+      "id": "t1",
+      "name": "Nom de l'établissement",
+      "type": "caviste|restaurant|importateur|distributeur|autre",
+      "city": "Ville",
+      "country": "Pays",
+      "snippet": "1 ligne décrivant pourquoi c'est une bonne cible",
+      "contact_name": "Prénom Nom du décideur (suggestion à valider)",
+      "contact_role": "Acheteur, Sommelier, etc.",
+      "email": "email plausible (suggestion à valider)",
+      "phone": "+33 X XX XX XX XX (suggestion à valider)",
+      "linkedin_url": "https://linkedin.com/in/... (si plausible)",
+      "tags": ["bio", "naturel", "premium"]
+    }}
+  ]
+}}
+Marque CLAIREMENT toutes les coordonnées comme à valider — ne pas inventer de vrais comptes existants. 8 contacts exactement, variés en quartiers/types."""
+
+    prompt_en = f"""You are EtOH Pilot. The user is looking for commercial contacts to sell their {bp.get('main_products') or 'wines/spirits'}.
+User profile: {bp.get('business_name') or '—'} | Region: {bp.get('region') or '—'}.
+
+Query: "{payload.query}"
+
+Generate 8 plausible contacts matching the query as STRICT JSON (no markdown, no ```).
+Structure:
+{{
+  "interpretation": "You're looking for X in Y, I'll target Z (1 sentence)",
+  "targets": [
+    {{
+      "id": "t1",
+      "name": "Business name",
+      "type": "wine_shop|restaurant|importer|distributor|other",
+      "city": "City",
+      "country": "Country",
+      "snippet": "1-line reason why it's a good target",
+      "contact_name": "First Last (to validate)",
+      "contact_role": "Buyer, Sommelier, etc.",
+      "email": "plausible email (to validate)",
+      "phone": "+XX XXX (to validate)",
+      "linkedin_url": "https://linkedin.com/in/... (if plausible)",
+      "tags": ["organic", "natural", "premium"]
+    }}
+  ]
+}}
+Mark ALL contact info as "to validate" — do not invent real existing accounts. Exactly 8 contacts, varied by neighborhood/type."""
+
+    chat = _make_chat(
+        session_id=f"pilot_search_{current_user['user_id']}_{uuid.uuid4().hex[:8]}",
+        system_message=_pilot_system(lang),
+    )
+    raw = await chat.send_message(UserMessage(text=prompt_fr if lang == "fr" else prompt_en))
+
+    import json, re
+    cleaned = re.sub(r"^```(?:json)?|```$", "", raw.strip(), flags=re.MULTILINE).strip()
+    try:
+        parsed = json.loads(cleaned)
+        targets = parsed.get("targets", [])
+        interpretation = parsed.get("interpretation", "")
+    except Exception:
+        targets = []
+        interpretation = ""
+
+    # Ensure stable ids
+    for i, t in enumerate(targets):
+        t["id"] = f"t{i+1}"
+
+    search_id = f"sch_{uuid.uuid4().hex[:12]}"
+    await db.pilot_searches.insert_one({
+        "id": search_id,
+        "user_id": current_user["user_id"],
+        "query": payload.query,
+        "language": lang,
+        "interpretation": interpretation,
+        "targets": targets,
+        "created_at": _now(),
+    })
+    return {
+        "search_id": search_id,
+        "query": payload.query,
+        "interpretation": interpretation,
+        "targets": targets,
+    }
+
+
+@api.get("/pilot/searches")
+async def pilot_searches(current_user: Dict[str, Any] = Depends(get_current_user)):
+    cursor = db.pilot_searches.find(
+        {"user_id": current_user["user_id"]}, {"_id": 0}
+    ).sort("created_at", -1).limit(20)
+    items = []
+    async for c in cursor:
+        items.append({
+            "id": c["id"],
+            "query": c["query"],
+            "target_count": len(c.get("targets", [])),
+            "created_at": c["created_at"].isoformat() if isinstance(c.get("created_at"), datetime) else c.get("created_at"),
+        })
+    return {"items": items}
+
+
+@api.post("/pilot/draft")
+async def pilot_draft(payload: PilotDraftIn,
+                      current_user: Dict[str, Any] = Depends(get_current_user)):
+    """Generate AI-drafted message for a specific target + channel. FREE (cost only on send)."""
+    search = await db.pilot_searches.find_one(
+        {"id": payload.search_id, "user_id": current_user["user_id"]}, {"_id": 0}
+    )
+    if not search:
+        raise HTTPException(status_code=404, detail="Search not found")
+    target = next((t for t in search.get("targets", []) if t.get("id") == payload.target_id), None)
+    if not target:
+        raise HTTPException(status_code=404, detail="Target not found")
+
+    bp = current_user.get("business_profile") or {}
+    lang = payload.language
+
+    if payload.channel == "email":
+        channel_instr_fr = "Format email : ligne 'Objet :' puis corps. 140-200 mots. Ton chaleureux et professionnel."
+        channel_instr_en = "Email format: 'Subject:' line then body. 140-200 words. Warm professional tone."
+    elif payload.channel == "whatsapp":
+        channel_instr_fr = "Format WhatsApp : 60-100 mots max, direct, friendly mais pro. Pas d'objet, pas de signature longue. 1 emoji max."
+        channel_instr_en = "WhatsApp format: 60-100 words max, direct, friendly but professional. No subject, short signature. 1 emoji max."
+    else:  # linkedin
+        channel_instr_fr = "Format message LinkedIn : 80-150 mots, ton pro et personnalisé. Pas d'objet."
+        channel_instr_en = "LinkedIn message format: 80-150 words, professional and personalized tone. No subject line."
+
+    prompt_fr = f"""Rédige un message de prospection commerciale pour ce contact.
+
+CONTACT :
+- Établissement : {target.get('name')} ({target.get('type')}, {target.get('city')})
+- Décideur : {target.get('contact_name') or 'contact principal'} ({target.get('contact_role') or '—'})
+- Pourquoi c'est une bonne cible : {target.get('snippet') or ''}
+- Tags : {', '.join(target.get('tags') or [])}
+
+PRODUCTEUR (EXPÉDITEUR) :
+- {bp.get('business_name') or 'EtOH'} ({bp.get('region') or '—'})
+- Produits : {bp.get('main_products') or 'vins/spiritueux'}
+- Rôle de l'expéditeur : {bp.get('role') or 'Dirigeant'}
+
+NOTE PERSO (à intégrer si fournie) : {payload.custom_note or '(aucune)'}
+
+CANAL : {payload.channel.upper()}
+{channel_instr_fr}
+
+Réponds UNIQUEMENT avec le message rédigé, sans préambule."""
+
+    prompt_en = f"""Write a commercial prospecting message for this contact.
+
+CONTACT:
+- Business: {target.get('name')} ({target.get('type')}, {target.get('city')})
+- Decision-maker: {target.get('contact_name') or 'main contact'} ({target.get('contact_role') or '—'})
+- Why it's a good target: {target.get('snippet') or ''}
+- Tags: {', '.join(target.get('tags') or [])}
+
+PRODUCER (SENDER):
+- {bp.get('business_name') or 'EtOH'} ({bp.get('region') or '—'})
+- Products: {bp.get('main_products') or 'wines/spirits'}
+- Sender role: {bp.get('role') or 'Owner'}
+
+CUSTOM NOTE (integrate if provided): {payload.custom_note or '(none)'}
+
+CHANNEL: {payload.channel.upper()}
+{channel_instr_en}
+
+Reply ONLY with the message, no preamble."""
+
+    chat = _make_chat(
+        session_id=f"pilot_draft_{current_user['user_id']}_{uuid.uuid4().hex[:8]}",
+        system_message=_studio_system(lang),  # use Studio's copywriter system prompt
+    )
+    content = await chat.send_message(UserMessage(text=prompt_fr if lang == "fr" else prompt_en))
+
+    # For email, try to split out subject
+    subject = None
+    body = content.strip()
+    if payload.channel == "email":
+        # Try to extract "Objet:" / "Subject:" first line
+        first_line, _, rest = body.partition("\n")
+        if first_line.lower().startswith(("objet", "subject")):
+            _, _, subj_val = first_line.partition(":")
+            subject = subj_val.strip().strip("*").strip()
+            body = rest.lstrip()
+    return {
+        "target_id": payload.target_id,
+        "channel": payload.channel,
+        "subject": subject,
+        "body": body,
+    }
+
+
+@api.post("/pilot/send-email")
+async def pilot_send_email(payload: PilotSendEmailIn,
+                           current_user: Dict[str, Any] = Depends(get_current_user)):
+    """
+    Sends an outbound email via Resend.
+    *** MOCKED *** until RESEND_API_KEY is set + DNS validated on pilot.etoh.fr.
+    Deducts 1 credit per send.
+    """
+    remaining = await _consume_credits(current_user["user_id"], ACTION_COST)
+
+    real_send_attempted = False
+    delivery_ok = True
+    delivery_info: Dict[str, Any] = {"mocked": True}
+
+    if RESEND_API_KEY:
+        real_send_attempted = True
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                r = await client.post(
+                    "https://api.resend.com/emails",
+                    headers={
+                        "Authorization": f"Bearer {RESEND_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "from": f"{RESEND_FROM_NAME} <{RESEND_FROM_EMAIL}>",
+                        "to": [payload.to_email],
+                        "subject": payload.subject,
+                        "text": payload.body,
+                        "reply_to": current_user["email"],
+                    },
+                )
+            delivery_ok = r.status_code in (200, 202)
+            delivery_info = {"mocked": False, "provider": "resend", "status": r.status_code, "body": r.text[:300]}
+        except Exception as e:
+            delivery_ok = False
+            delivery_info = {"mocked": False, "provider": "resend", "error": str(e)[:300]}
+
+    await _log_action(
+        current_user["user_id"],
+        "send_email",
+        {
+            "search_id": payload.search_id,
+            "target_id": payload.target_id,
+            "to_email": payload.to_email,
+            "to_name": payload.to_name,
+            "subject": payload.subject,
+            "delivery": delivery_info,
+        },
+        cost=ACTION_COST,
+    )
+
+    return {
+        "ok": delivery_ok,
+        "mocked": not real_send_attempted,
+        "credits_remaining": remaining,
+        "delivery": delivery_info,
+    }
+
+
+@api.post("/pilot/open-channel")
+async def pilot_open_channel(payload: PilotOpenChannelIn,
+                             current_user: Dict[str, Any] = Depends(get_current_user)):
+    """Record an outbound WhatsApp/LinkedIn action and deduct credits.
+    The frontend opens the actual URL — we just track + charge."""
+    remaining = await _consume_credits(current_user["user_id"], ACTION_COST)
+    await _log_action(
+        current_user["user_id"],
+        f"open_{payload.channel}",
+        {
+            "search_id": payload.search_id,
+            "target_id": payload.target_id,
+            "channel": payload.channel,
+        },
+        cost=ACTION_COST,
+    )
+    return {"ok": True, "credits_remaining": remaining}
+
+
+@api.get("/pilot/actions")
+async def pilot_actions(current_user: Dict[str, Any] = Depends(get_current_user)):
+    cursor = db.action_log.find(
+        {"user_id": current_user["user_id"]}, {"_id": 0}
+    ).sort("created_at", -1).limit(50)
+    items = []
+    async for c in cursor:
+        items.append({
+            "id": c["id"],
+            "action": c["action"],
+            "cost": c["cost"],
+            "payload": c.get("payload", {}),
+            "created_at": c["created_at"].isoformat() if isinstance(c.get("created_at"), datetime) else c.get("created_at"),
+        })
+    return {"items": items}
+
+
+app.include_router(api)
+
 # ---------------------------------------------------------------------------
 # Mount router & middleware
 # ---------------------------------------------------------------------------
-app.include_router(api)
 
 app.add_middleware(
     CORSMiddleware,

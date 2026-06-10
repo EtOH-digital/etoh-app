@@ -15,15 +15,16 @@ export const Colors = {
   warning: "#b45309",
   error: "#b91c1c",
 
-  // Brand
-  coach: "#c7263e",
+  // Brand (matches the EtOH logo variants provided by the user)
+  brandPrimary: "#1f3a5f", // EtOH navy used in default logo and Studio
+  coach: "#c7263e",        // Coach — red
   coachDark: "#a61c31",
-  studio: "#1a365d",
-  studioDark: "#11243f",
-  pilot: "#4ba3b7",
+  studio: "#1f3a5f",       // Studio — dark navy
+  studioDark: "#152a45",
+  pilot: "#4ba3b7",        // Pilot — teal
   pilotDark: "#3d8697",
 
-  // Surfaces
+  // Soft surfaces (tinted backgrounds for module cards)
   coachSoft: "#FCEFF1",
   studioSoft: "#EAF0F7",
   pilotSoft: "#E8F4F7",
@@ -46,9 +47,17 @@ export const Radii = {
   pill: 999,
 };
 
+/**
+ * Font tokens. Family names match the keys passed to `useFonts(...)` in
+ * the root layout. Use `Fonts.headingBold` for any heading/title and
+ * `Fonts.body` / `Fonts.bodyBold` for the rest of the UI.
+ */
 export const Fonts = {
-  heading: "serif", // Cormorant fallback to system serif (no font files bundled)
-  body: "System",
+  heading: "ExpletusSans_400Regular",
+  headingBold: "ExpletusSans_700Bold",
+  body: "Lato_400Regular",
+  bodyMedium: "Lato_700Bold",
+  bodyBold: "Lato_900Black",
 };
 
 export const Shadow = {

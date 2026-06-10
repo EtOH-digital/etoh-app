@@ -3,6 +3,8 @@ import * as SplashScreen from "expo-splash-screen";
 import { useEffect } from "react";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
+import { useFonts as useExpletus, ExpletusSans_400Regular, ExpletusSans_700Bold } from "@expo-google-fonts/expletus-sans";
+import { Lato_400Regular, Lato_700Bold, Lato_900Black } from "@expo-google-fonts/lato";
 
 import { useIconFonts } from "@/src/hooks/use-icon-fonts";
 import { AuthProvider, useAuth } from "@/src/auth/AuthContext";
@@ -33,15 +35,24 @@ function RootNav() {
 }
 
 export default function RootLayout() {
-  const [loaded, error] = useIconFonts();
+  const [iconsLoaded, iconsError] = useIconFonts();
+  const [brandLoaded] = useExpletus({
+    ExpletusSans_400Regular,
+    ExpletusSans_700Bold,
+    Lato_400Regular,
+    Lato_700Bold,
+    Lato_900Black,
+  });
+
+  const ready = iconsLoaded && brandLoaded;
 
   useEffect(() => {
-    if (loaded || error) {
+    if (ready || iconsError) {
       SplashScreen.hideAsync();
     }
-  }, [loaded, error]);
+  }, [ready, iconsError]);
 
-  if (!loaded && !error) return null;
+  if (!ready && !iconsError) return null;
 
   return (
     <SafeAreaProvider>
