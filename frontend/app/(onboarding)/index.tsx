@@ -9,6 +9,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { Colors, Spacing, Radii, Fonts } from "@/src/theme";
 import { useAuth } from "@/src/auth/AuthContext";
 import { HexDots } from "@/src/components/HexDots";
+import { apiFetch } from "@/src/api/client";
 
 type Answers = {
   business_type?: string;
@@ -134,6 +135,14 @@ export default function OnboardingScreen() {
         brand_voice_style: style,
         brand_voice_languages: ["fr", "en"],
       } as any);
+
+      // Generate the AI Commercial Profile synthesis (ICP / positioning / priorities)
+      try {
+        await apiFetch("/profile/synthesize", { method: "POST" });
+      } catch {
+        // Best effort — synthesis can be re-triggered later from Profile
+      }
+
       router.replace("/(tabs)");
     } finally {
       setSaving(false);

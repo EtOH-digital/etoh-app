@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -9,12 +9,14 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  Linking,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 
-import { Colors, Spacing, Radii } from "@/src/theme";
+import { Colors, Spacing, Radii, Fonts } from "@/src/theme";
 import { useAuth } from "@/src/auth/AuthContext";
+import { apiFetch } from "@/src/api/client";
 
 const BUSINESS_TYPES = [
   { id: "winery", label: "Domaine" },
@@ -25,8 +27,49 @@ const BUSINESS_TYPES = [
 ];
 
 export default function Profile() {
-  const { user, logout, updateProfile } = useAuth();
-  const bp = user?.business_profile || {};
+  const { user, logout, updateProfile, refresh } = useAuth();
+  const bp = (user?.business_profile as any) || {};
+  const synthesis = bp.synthesis;
+  const [synthesizing, setSynthesizing] = useState(false);
+  const [crmItems, setCrmItems] = useState<any[]>([]);
+  const [crmLoading, setCrmLoading] = useState(false);
+
+  const loadCrm = async () => {
+    setCrmLoading(true);
+    try {
+      const r = await apiFetch<{ items: any[] }>("/crm/contacts");
+      setCrmItems(r.items || []);
+    } catch {}
+    finally { setCrmLoading(false); }
+  };
+
+  useEffect(() => { loadCrm(); }, []);
+
+  const regenSynthesis = async () => {
+    setSynthesizing(true);
+    try {
+      await apiFetch("/profile/synthesize", { method: "POST" });
+      await refresh();
+    } finally { setSynthesizing(false); }
+  };
+
+  const updateStatus = async (id: string, status: string) => {
+    await apiFetch(`/crm/contacts/${id}`, { method: "PATCH", body: JSON.stringify({ status }) });
+    loadCrm();
+  };
+
+  const exportCsv = async () => {
+    const r = await apiFetch<{ csv: string }>("/crm/export");
+    if (Platform.OS === "web" && typeof window !== "undefined") {
+      const blob = new Blob([r.csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `etoh-crm-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+  };
 
   const [businessName, setBusinessName] = useState(bp.business_name || "");
   const [businessType, setBusinessType] = useState(bp.business_type || "winery");
@@ -86,7 +129,87 @@ export default function Profile() {
             <Text style={s.email}>{user?.email}</Text>
           </View>
 
-          <Text style={s.sectionTitle}>Mon entreprise</Text>
+          {/* Profil Commercial — synthèse IA (US-003) */}
+          <View style={s.synthCard} testID="commercial-profile">
+            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <Text style={s.synthBadge}>PROFIL COMMERCIAL · IA</Text>
+              <TouchableOpacity onPress={regenSynthesis} disabled={synthesizing} testID="commercial-profile-regen">
+                {synthesizing ? <ActivityIndicator size="small" color={Colors.brandPrimary} /> : <Ionicons name="refresh" size={16} color={Colors.brandPrimary} />}
+              </TouchableOpacity>
+            </View>
+            {synthesis ? (
+              <>
+                {!!synthesis.tagline && <Text style={s.synthTagline}>"{synthesis.tagline}"</Text>}
+                {!!synthesis.positioning && (
+                  <View style={s.synthBlock}>
+                    <Text style={s.synthLabel}>Positionnement</Text>
+                    <Text style={s.synthValue}>{synthesis.positioning}</Text>
+                  </View>
+                )}
+                {Array.isArray(synthesis.icp) && synthesis.icp.length > 0 && (
+                  <View style={s.synthBlock}>
+                    <Text style={s.synthLabel}>ICP — Acheteurs cibles</Text>
+                    {synthesis.icp.map((it: any, i: number) => (
+                      <View key={i} style={s.icpRow}>
+                        <Text style={s.icpLabel}>• {it.label}</Text>
+                        {!!it.why && <Text style={s.icpWhy}>  {it.why}</Text>}
+                      </View>
+                    ))}
+                  </View>
+                )}
+                {Array.isArray(synthesis.priorities) && synthesis.priorities.length > 0 && (
+                  <View style={s.synthBlock}>
+                    <Text style={s.synthLabel}>Priorités commerciales</Text>
+                    {synthesis.priorities.map((p: string, i: number) => (
+                      <Text key={i} style={s.priorityRow}>{i + 1}. {p}</Text>
+                    ))}
+                  </View>
+                )}
+              </>
+            ) : (
+              <TouchableOpacity onPress={regenSynthesis} style={s.synthGenBtn} testID="commercial-profile-generate">
+                <Ionicons name="sparkles" size={14} color="#fff" />
+                <Text style={s.synthGenText}>Générer mon profil commercial</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+
+          {/* CRM — Mes prospects (US-034) */}
+          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 32 }}>
+            <Text style={[s.sectionTitle, { marginBottom: 0 }]}>Mes prospects ({crmItems.length})</Text>
+            {crmItems.length > 0 && (
+              <TouchableOpacity onPress={exportCsv} style={s.csvBtn} testID="crm-export">
+                <Ionicons name="download-outline" size={14} color={Colors.brandPrimary} />
+                <Text style={s.csvBtnText}>Export CSV</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+          {crmLoading && <ActivityIndicator color={Colors.brandPrimary} style={{ marginVertical: 12 }} />}
+          {!crmLoading && crmItems.length === 0 && (
+            <Text style={s.emptyHint}>
+              Vos prospects contactés via Pilot apparaîtront ici automatiquement.
+            </Text>
+          )}
+          {crmItems.map((c) => (
+            <View key={c.id} style={s.crmCard} testID={`crm-${c.id}`}>
+              <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+                <Text style={s.crmName}>{c.name}</Text>
+                <StatusPill status={c.status} onChange={(st) => updateStatus(c.id, st)} />
+              </View>
+              <Text style={s.crmMeta}>{c.type} · {c.city}{c.country ? `, ${c.country}` : ""}</Text>
+              {!!c.contact_name && <Text style={s.crmMeta}>{c.contact_name}{c.contact_role ? ` · ${c.contact_role}` : ""}</Text>}
+              <View style={s.crmFooter}>
+                <Text style={s.crmCount}>{c.contact_count}× contacté · dernier canal {c.last_channel}</Text>
+                {!!c.email && (
+                  <TouchableOpacity onPress={() => Linking.openURL(`mailto:${c.email}`)}>
+                    <Ionicons name="mail-outline" size={14} color={Colors.brandPrimary} />
+                  </TouchableOpacity>
+                )}
+              </View>
+            </View>
+          ))}
+
+          <Text style={[s.sectionTitle, { marginTop: 32 }]}>Mon entreprise</Text>
 
           <Text style={s.label}>Nom de l'entreprise</Text>
           <TextInput
@@ -313,6 +436,25 @@ function BVRow({ icon, color, title, items }: { icon: any; color: string; title:
         </View>
       </View>
     </View>
+  );
+}
+
+function StatusPill({ status, onChange }: { status: string; onChange: (s: string) => void }) {
+  const opts = [
+    { id: "new", label: "Nouveau", color: Colors.textMuted },
+    { id: "contacted", label: "Contacté", color: Colors.hex2 },
+    { id: "replied", label: "Répondu", color: Colors.hex3 },
+    { id: "in_discussion", label: "En discussion", color: Colors.studio },
+    { id: "won", label: "Gagné", color: Colors.success },
+    { id: "lost", label: "Perdu", color: Colors.error },
+  ];
+  const idx = opts.findIndex((o) => o.id === status);
+  const cur = opts[idx >= 0 ? idx : 0];
+  const next = () => onChange(opts[(idx + 1) % opts.length].id);
+  return (
+    <TouchableOpacity onPress={next} style={[s.statusPill, { borderColor: cur.color, backgroundColor: cur.color + "22" }]} testID={`crm-status-${status}`}>
+      <Text style={[s.statusText, { color: cur.color }]}>{cur.label}</Text>
+    </TouchableOpacity>
   );
 }
 

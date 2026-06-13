@@ -1096,6 +1096,15 @@ async def pilot_send_email(payload: PilotSendEmailIn,
     """
     remaining = await _consume_credits(current_user["user_id"], ACTION_COST)
 
+    # Auto-upsert into CRM (US-034)
+    search = await db.pilot_searches.find_one(
+        {"id": payload.search_id, "user_id": current_user["user_id"]}, {"_id": 0, "targets": 1}
+    )
+    if search:
+        target = next((t for t in (search.get("targets") or []) if t.get("id") == payload.target_id), None)
+        if target:
+            await _upsert_crm_contact(current_user["user_id"], target, "email")
+
     real_send_attempted = False
     delivery_ok = True
     delivery_info: Dict[str, Any] = {"mocked": True}
@@ -1152,6 +1161,14 @@ async def pilot_open_channel(payload: PilotOpenChannelIn,
     """Record an outbound WhatsApp/LinkedIn action and deduct credits.
     The frontend opens the actual URL — we just track + charge."""
     remaining = await _consume_credits(current_user["user_id"], ACTION_COST)
+    # Auto-upsert into CRM
+    search = await db.pilot_searches.find_one(
+        {"id": payload.search_id, "user_id": current_user["user_id"]}, {"_id": 0, "targets": 1}
+    )
+    if search:
+        target = next((t for t in (search.get("targets") or []) if t.get("id") == payload.target_id), None)
+        if target:
+            await _upsert_crm_contact(current_user["user_id"], target, payload.channel)
     await _log_action(
         current_user["user_id"],
         f"open_{payload.channel}",
@@ -1325,6 +1342,200 @@ async def on_startup():
     await db.user_sessions.create_index("user_id")
     await db.user_sessions.create_index("expires_at", expireAfterSeconds=0)
     logger.info("EtOH backend started — indexes ensured.")
+
+
+# ---------- US-003 — Profil Commercial synthétique ----------
+@api.post("/profile/synthesize")
+async def profile_synthesize(current_user: Dict[str, Any] = Depends(get_current_user)):
+    """Génère par IA un profil commercial synthétique (ICP / Positionnement / Priorités)
+    à partir des données collectées lors de l'onboarding."""
+    bp = current_user.get("business_profile") or {}
+    lang = bp.get("language") or "fr"
+
+    if lang == "fr":
+        prompt = f"""Tu es expert en stratégie commerciale vins/bières/spiritueux.
+Voici les données utilisateur :
+- Type d'activité : {bp.get('business_type') or '—'}
+- Nom : {bp.get('business_name') or '—'}
+- Région : {bp.get('region') or '—'}
+- Produits : {bp.get('main_products') or '—'}
+- CA : {bp.get('revenue') or '—'}
+- Prix moyen bouteille : {bp.get('avg_bottle_price') or '—'} €
+- Prix moyen carton : {bp.get('avg_case_price') or '—'} €
+- Pays cibles : {', '.join(bp.get('target_countries') or []) or '—'}
+- Canaux : {', '.join(bp.get('target_channels') or []) or '—'}
+- Objectifs : {', '.join(bp.get('objectives') or []) or '—'}
+
+Renvoie UNIQUEMENT un JSON strict (pas de markdown, pas de ```) :
+{{
+  "positioning": "1 phrase courte décrivant le positionnement",
+  "icp": [
+    {{"label": "Type d'acheteur 1", "why": "1 phrase"}},
+    {{"label": "Type d'acheteur 2", "why": "1 phrase"}},
+    {{"label": "Type d'acheteur 3", "why": "1 phrase"}}
+  ],
+  "priorities": [
+    "Priorité commerciale 1 — court terme",
+    "Priorité commerciale 2 — moyen terme",
+    "Priorité commerciale 3 — long terme"
+  ],
+  "tagline": "1 phrase d'accroche commerciale max 12 mots"
+}}"""
+    else:
+        prompt = f"""You are a commercial strategy expert for wine/beer/spirits.
+User data:
+- Activity: {bp.get('business_type') or '—'}
+- Name: {bp.get('business_name') or '—'}
+- Region: {bp.get('region') or '—'}
+- Products: {bp.get('main_products') or '—'}
+- Revenue: {bp.get('revenue') or '—'}
+- Avg bottle price: {bp.get('avg_bottle_price') or '—'} €
+- Avg case price: {bp.get('avg_case_price') or '—'} €
+- Target countries: {', '.join(bp.get('target_countries') or []) or '—'}
+- Channels: {', '.join(bp.get('target_channels') or []) or '—'}
+- Objectives: {', '.join(bp.get('objectives') or []) or '—'}
+
+Return ONLY strict JSON (no markdown, no ```):
+{{"positioning": "...", "icp": [{{"label":"...","why":"..."}},...], "priorities": ["...","...","..."], "tagline":"..."}}"""
+
+    chat = _make_chat(
+        session_id=f"synth_{current_user['user_id']}_{uuid.uuid4().hex[:8]}",
+        system_message=_coach_system(lang),
+    )
+    raw = await chat.send_message(UserMessage(text=prompt))
+    import json, re
+    cleaned = re.sub(r"^```(?:json)?|```$", "", raw.strip(), flags=re.MULTILINE).strip()
+    try:
+        synthesis = json.loads(cleaned)
+    except Exception:
+        synthesis = {"positioning": raw[:200], "icp": [], "priorities": [], "tagline": ""}
+
+    await db.users.update_one(
+        {"user_id": current_user["user_id"]},
+        {"$set": {"business_profile.synthesis": synthesis, "business_profile.synthesis_at": _now()}},
+    )
+    return {"synthesis": synthesis}
+
+
+# ---------- US-034 — CRM léger ----------
+class CrmContactStatus(str):
+    new = "new"
+    contacted = "contacted"
+    replied = "replied"
+    in_discussion = "in_discussion"
+    won = "won"
+    lost = "lost"
+
+
+class CrmContactPatch(BaseModel):
+    status: Optional[Literal["new", "contacted", "replied", "in_discussion", "won", "lost"]] = None
+    notes: Optional[str] = None
+
+
+async def _upsert_crm_contact(user_id: str, target: Dict[str, Any], channel: str):
+    """Auto-create or upsert a CRM contact when user performs an outbound action."""
+    key = f"crm_{user_id}_{target.get('name','')[:30]}_{target.get('city','')[:20]}".replace(" ", "_").lower()
+    now = _now()
+    existing = await db.crm_contacts.find_one({"key": key}, {"_id": 0})
+    if existing:
+        await db.crm_contacts.update_one(
+            {"key": key},
+            {"$set": {
+                "last_contacted_at": now,
+                "last_channel": channel,
+                "status": "contacted" if existing.get("status") in (None, "new") else existing.get("status"),
+            },
+             "$inc": {"contact_count": 1}},
+        )
+    else:
+        await db.crm_contacts.insert_one({
+            "id": f"crm_{uuid.uuid4().hex[:12]}",
+            "key": key,
+            "user_id": user_id,
+            "name": target.get("name"),
+            "type": target.get("type"),
+            "city": target.get("city"),
+            "country": target.get("country"),
+            "contact_name": target.get("contact_name"),
+            "contact_role": target.get("contact_role"),
+            "email": target.get("email"),
+            "phone": target.get("phone"),
+            "linkedin_url": target.get("linkedin_url"),
+            "tags": target.get("tags") or [],
+            "status": "contacted",
+            "notes": "",
+            "contact_count": 1,
+            "first_contacted_at": now,
+            "last_contacted_at": now,
+            "last_channel": channel,
+            "created_at": now,
+        })
+
+
+@api.get("/crm/contacts")
+async def crm_list(current_user: Dict[str, Any] = Depends(get_current_user)):
+    cursor = db.crm_contacts.find(
+        {"user_id": current_user["user_id"]}, {"_id": 0, "key": 0}
+    ).sort("last_contacted_at", -1).limit(200)
+    items = []
+    async for c in cursor:
+        for k in ("first_contacted_at", "last_contacted_at", "created_at"):
+            if isinstance(c.get(k), datetime):
+                c[k] = c[k].isoformat()
+        items.append(c)
+    return {"items": items, "total": len(items)}
+
+
+@api.patch("/crm/contacts/{contact_id}")
+async def crm_update(contact_id: str, payload: CrmContactPatch,
+                     current_user: Dict[str, Any] = Depends(get_current_user)):
+    update = {k: v for k, v in payload.model_dump(exclude_none=True).items()}
+    if not update:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    update["updated_at"] = _now()
+    r = await db.crm_contacts.update_one(
+        {"id": contact_id, "user_id": current_user["user_id"]}, {"$set": update}
+    )
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    return {"ok": True}
+
+
+@api.delete("/crm/contacts/{contact_id}")
+async def crm_delete(contact_id: str, current_user: Dict[str, Any] = Depends(get_current_user)):
+    r = await db.crm_contacts.delete_one(
+        {"id": contact_id, "user_id": current_user["user_id"]}
+    )
+    return {"deleted": r.deleted_count}
+
+
+@api.get("/crm/export")
+async def crm_export(current_user: Dict[str, Any] = Depends(get_current_user)):
+    """Returns CSV string of all CRM contacts (for download)."""
+    cursor = db.crm_contacts.find(
+        {"user_id": current_user["user_id"]}, {"_id": 0, "key": 0}
+    ).sort("last_contacted_at", -1)
+    import csv, io
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        "Nom", "Type", "Ville", "Pays", "Contact", "Rôle", "Email", "Téléphone",
+        "LinkedIn", "Statut", "Canal", "Tentatives", "Premier contact", "Dernier contact", "Notes",
+    ])
+    count = 0
+    async for c in cursor:
+        writer.writerow([
+            c.get("name"), c.get("type"), c.get("city"), c.get("country"),
+            c.get("contact_name"), c.get("contact_role"),
+            c.get("email"), c.get("phone"), c.get("linkedin_url"),
+            c.get("status"), c.get("last_channel"),
+            c.get("contact_count"),
+            (c.get("first_contacted_at").isoformat() if isinstance(c.get("first_contacted_at"), datetime) else c.get("first_contacted_at")) or "",
+            (c.get("last_contacted_at").isoformat() if isinstance(c.get("last_contacted_at"), datetime) else c.get("last_contacted_at")) or "",
+            c.get("notes") or "",
+        ])
+        count += 1
+    return {"csv": buf.getvalue(), "count": count}
 
 
 app.include_router(api)
