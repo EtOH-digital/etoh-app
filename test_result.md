@@ -103,6 +103,17 @@
 #====================================================================================================
 
 frontend:
+  - task: "Unified ChatGPT-like UX across Coach / Studio / Pilot (true unification)"
+    implemented: true
+    working: true
+    file: "frontend/app/(tabs)/coach.tsx, studio.tsx, pilot.tsx + frontend/src/components/ChatScreen.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "Refactored into a single shared `ChatScreen` component used by all 3 modules. Same layout (logo header, empty state with title/subtitle, 4 suggestion chips, chat messages, input bar with send) — only the brand color, title, subtitle, suggestions, placeholder and onSend handler differ per module. Coach uses red, Studio uses navy, Pilot uses teal. Studio auto-detects template/tone from message keywords. Pilot keeps email/whatsapp/linkedin action modal but renders prospect cards as extras under the assistant bubble. Verified visually: each module loads, accepts ?prompt= pre-fill, sends a message, and renders the AI reply correctly."
   - task: "Unified Chat UX + Boost prompt pre-fill (Coach/Studio/Pilot)"
     implemented: true
     working: true

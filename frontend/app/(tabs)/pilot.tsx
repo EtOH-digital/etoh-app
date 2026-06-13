@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   View,
   Text,
@@ -7,20 +7,16 @@ import {
   ScrollView,
   StyleSheet,
   ActivityIndicator,
-  KeyboardAvoidingView,
-  Platform,
   Modal,
   Linking,
-  Image,
 } from "react-native";
-import { useLocalSearchParams } from "expo-router";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Clipboard from "expo-clipboard";
 
 import { Colors, Spacing, Radii, Fonts } from "@/src/theme";
 import { apiFetch } from "@/src/api/client";
 import { useAuth } from "@/src/auth/AuthContext";
+import ChatScreen, { SendHelpers } from "@/src/components/ChatScreen";
 
 type Target = {
   id: string;
@@ -45,27 +41,21 @@ type SearchResult = {
 };
 
 type Channel = "email" | "whatsapp" | "linkedin";
-
 type Draft = { subject?: string | null; body: string; channel: Channel };
 
 const SUGGESTIONS = [
-  "cavistes paris vins nature",
-  "importateurs vin belgique bio",
-  "restaurants étoilés lyon",
-  "distributeurs spiritueux new york",
+  "Trouve-moi des cavistes à Paris orientés vins nature",
+  "Importateurs de vin bio en Belgique",
+  "Restaurants étoilés à Lyon ouverts aux nouveaux fournisseurs",
+  "Distributeurs de spiritueux à New York",
 ];
 
 export default function PilotScreen() {
   const { user, refresh } = useAuth();
-  const params = useLocalSearchParams<{ prompt?: string }>();
-  const [query, setQuery] = useState("");
-  const [result, setResult] = useState<SearchResult | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  useEffect(() => {
-    if (params.prompt && !query) setQuery(params.prompt as string);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [params.prompt]);
+  const credits = user?.credits ?? 0;
+
+  // Track the latest search so the modal can post to /pilot/draft etc.
+  const [latestSearch, setLatestSearch] = useState<SearchResult | null>(null);
 
   // Action modal state
   const [activeTarget, setActiveTarget] = useState<Target | null>(null);
@@ -78,30 +68,29 @@ export default function PilotScreen() {
   const [sending, setSending] = useState(false);
   const [actionStatus, setActionStatus] = useState<string | null>(null);
 
-  const credits = user?.credits ?? 0;
-
-  const runSearch = async (text?: string) => {
-    const q = (text ?? query).trim();
-    if (!q) return;
-    setQuery(q);
-    setErr(null);
-    setLoading(true);
-    setResult(null);
-    try {
-      const lang = user?.business_profile?.language || "fr";
-      const data = await apiFetch<SearchResult>("/pilot/search", {
-        method: "POST",
-        body: JSON.stringify({ query: q, language: lang }),
-      });
-      setResult(data);
-    } catch (e: any) {
-      setErr(e.message || "Erreur");
-    } finally {
-      setLoading(false);
-    }
+  const handleSend = async (text: string, helpers: SendHelpers) => {
+    const lang = user?.business_profile?.language || "fr";
+    const data = await apiFetch<SearchResult>("/pilot/search", {
+      method: "POST",
+      body: JSON.stringify({ query: text, language: lang }),
+    });
+    setLatestSearch(data);
+    const intro =
+      `🎯 ${data.targets.length} cibles trouvées pour « ${data.query} »` +
+      (data.interpretation ? `\n\n${data.interpretation}` : "");
+    helpers.appendAssistant({
+      role: "assistant",
+      content: intro,
+      extras: (
+        <TargetsList
+          targets={data.targets}
+          onOpenAction={(t, c) => openAction(data, t, c)}
+        />
+      ),
+    });
   };
 
-  const openAction = async (target: Target, channel: Channel) => {
+  const openAction = async (search: SearchResult, target: Target, channel: Channel) => {
     setActiveTarget(target);
     setActiveChannel(channel);
     setDraft(null);
@@ -113,7 +102,7 @@ export default function PilotScreen() {
       const data = await apiFetch<{ subject?: string | null; body: string }>("/pilot/draft", {
         method: "POST",
         body: JSON.stringify({
-          search_id: result!.search_id,
+          search_id: search.search_id,
           target_id: target.id,
           channel,
           language: lang,
@@ -137,14 +126,14 @@ export default function PilotScreen() {
   };
 
   const sendEmail = async () => {
-    if (!activeTarget || !result) return;
+    if (!activeTarget || !latestSearch) return;
     if (credits < 1) {
       setActionStatus("⚠️ Crédits insuffisants. Profil → ajoutez des crédits.");
       return;
     }
     const to = (editedTo || "").trim();
     if (!to || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
-      setActionStatus("⚠️ Adresse email du destinataire invalide. Corrigez le champ « À » et réessayez.");
+      setActionStatus("⚠️ Adresse email invalide. Corrigez le champ « À » et réessayez.");
       return;
     }
     setSending(true);
@@ -155,7 +144,7 @@ export default function PilotScreen() {
         {
           method: "POST",
           body: JSON.stringify({
-            search_id: result.search_id,
+            search_id: latestSearch.search_id,
             target_id: activeTarget.id,
             to_email: to,
             to_name: activeTarget.name,
@@ -167,15 +156,12 @@ export default function PilotScreen() {
       await refresh();
       setActionStatus(
         r.mocked
-          ? `✓ Email simulé (Resend non encore activé). Crédits restants : ${r.credits_remaining}`
+          ? `✓ Email simulé. Crédits restants : ${r.credits_remaining}`
           : `✓ Email envoyé à ${to}. Crédits restants : ${r.credits_remaining}`
       );
     } catch (e: any) {
-      // Pretty-print common errors
       let msg = e?.message || "Erreur";
-      if (msg.includes("value is not a valid email") || msg.toLowerCase().includes("email")) {
-        msg = "Adresse email invalide. Corrigez le champ « À » et réessayez.";
-      }
+      if (/email/i.test(msg)) msg = "Adresse email invalide. Corrigez « À » et réessayez.";
       setActionStatus(`⚠️ ${msg}`);
     } finally {
       setSending(false);
@@ -183,7 +169,7 @@ export default function PilotScreen() {
   };
 
   const openWhatsApp = async () => {
-    if (!activeTarget || !result) return;
+    if (!activeTarget || !latestSearch) return;
     if (credits < 1) {
       setActionStatus("⚠️ Crédits insuffisants.");
       return;
@@ -194,7 +180,7 @@ export default function PilotScreen() {
       await apiFetch("/pilot/open-channel", {
         method: "POST",
         body: JSON.stringify({
-          search_id: result.search_id,
+          search_id: latestSearch.search_id,
           target_id: activeTarget.id,
           channel: "whatsapp",
         }),
@@ -203,7 +189,7 @@ export default function PilotScreen() {
       const phone = (activeTarget.phone || "").replace(/[^0-9+]/g, "");
       const url = `https://wa.me/${phone.replace(/^\+/, "")}?text=${encodeURIComponent(editedBody)}`;
       Linking.openURL(url);
-      setActionStatus("✓ WhatsApp ouvert. Crédits décomptés.");
+      setActionStatus("✓ WhatsApp ouvert. Crédit décompté.");
     } catch (e: any) {
       setActionStatus(`Erreur : ${e.message}`);
     } finally {
@@ -212,7 +198,7 @@ export default function PilotScreen() {
   };
 
   const openLinkedIn = async () => {
-    if (!activeTarget || !result) return;
+    if (!activeTarget || !latestSearch) return;
     if (credits < 1) {
       setActionStatus("⚠️ Crédits insuffisants.");
       return;
@@ -223,7 +209,7 @@ export default function PilotScreen() {
       await apiFetch("/pilot/open-channel", {
         method: "POST",
         body: JSON.stringify({
-          search_id: result.search_id,
+          search_id: latestSearch.search_id,
           target_id: activeTarget.id,
           channel: "linkedin",
         }),
@@ -232,7 +218,7 @@ export default function PilotScreen() {
       await refresh();
       const url = activeTarget.linkedin_url || "https://www.linkedin.com/messaging/";
       Linking.openURL(url);
-      setActionStatus("✓ Message copié + LinkedIn ouvert. Collez (Ctrl/Cmd+V) dans la conversation.");
+      setActionStatus("✓ Message copié + LinkedIn ouvert. Collez le message dans la conversation.");
     } catch (e: any) {
       setActionStatus(`Erreur : ${e.message}`);
     } finally {
@@ -241,178 +227,36 @@ export default function PilotScreen() {
   };
 
   return (
-    <SafeAreaView style={s.safe} edges={["top"]}>
-      <View style={s.header}>
-        <Image source={require("../../assets/brand/pilot.png")} style={s.headerLogo} resizeMode="contain" />
-        <View style={{ flex: 1 }} />
-        <View style={s.creditBadge} testID="pilot-credits">
-          <Ionicons name="flash" size={12} color={Colors.pilot} />
-          <Text style={s.creditText}>{credits} crédits</Text>
-        </View>
-      </View>
-
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-        keyboardVerticalOffset={80}
-      >
-        <ScrollView
-          style={{ flex: 1 }}
-          contentContainerStyle={{ padding: Spacing.lg, paddingBottom: 60 }}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
-          <Text style={s.titleBig}>Quelles actions de prospection&nbsp;?</Text>
-          <Text style={s.subtitle}>
-            Décrivez vos cibles en langage naturel. L'IA propose des contacts à contacter en 1 clic.
-          </Text>
-
-          <View style={s.searchRow}>
-            <TextInput
-              testID="pilot-search-input"
-              value={query}
-              onChangeText={setQuery}
-              placeholder='Ex. "cavistes paris vins nature"'
-              placeholderTextColor={Colors.textMuted}
-              style={s.searchInput}
-              onSubmitEditing={() => runSearch()}
-              returnKeyType="search"
-            />
-            <TouchableOpacity
-              testID="pilot-search-btn"
-              style={[s.searchBtn, (loading || !query.trim()) && { opacity: 0.5 }]}
-              onPress={() => runSearch()}
-              disabled={loading || !query.trim()}
-              activeOpacity={0.85}
-            >
-              {loading ? (
-                <ActivityIndicator color="#fff" size="small" />
-              ) : (
-                <Ionicons name="search" size={18} color="#fff" />
-              )}
-            </TouchableOpacity>
+    <>
+      <ChatScreen
+        testID="pilot"
+        color={Colors.pilot}
+        logo={require("../../assets/brand/pilot.png")}
+        emptyTitle="Qui voulez-vous prospecter ?"
+        emptySub="Décrivez vos cibles en langage naturel (type, zone, profil). Le Pilot identifie les contacts et écrit pour vous."
+        suggestions={SUGGESTIONS}
+        placeholder="Décrivez votre cible…"
+        headerRight={
+          <View style={mod.creditBadge}>
+            <Ionicons name="flash" size={12} color={Colors.pilot} />
+            <Text style={mod.creditText}>{credits}</Text>
           </View>
+        }
+        onSend={handleSend}
+      />
 
-          {!result && !loading && (
-            <View style={{ marginTop: Spacing.md }}>
-              <Text style={s.label}>Suggestions</Text>
-              {SUGGESTIONS.map((q, i) => (
-                <TouchableOpacity
-                  key={i}
-                  testID={`pilot-suggest-${i}`}
-                  style={s.suggestion}
-                  onPress={() => runSearch(q)}
-                >
-                  <Ionicons name="sparkles-outline" size={14} color={Colors.pilot} />
-                  <Text style={s.suggestionText}>{q}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          )}
-
-          {err && <Text style={s.err}>{err}</Text>}
-
-          {loading && (
-            <View style={{ alignItems: "center", paddingVertical: Spacing.xl, gap: Spacing.sm }}>
-              <ActivityIndicator color={Colors.pilot} />
-              <Text style={{ color: Colors.textMuted, fontFamily: Fonts.body }}>
-                Recherche en cours…
-              </Text>
-            </View>
-          )}
-
-          {result && (
-            <View style={{ marginTop: Spacing.lg }} testID="pilot-results">
-              {!!result.interpretation && (
-                <View style={s.interpretCard}>
-                  <Ionicons name="bulb-outline" size={16} color={Colors.pilot} />
-                  <Text style={s.interpretText}>{result.interpretation}</Text>
-                </View>
-              )}
-              <Text style={s.sectionTitle}>
-                {result.targets.length} contacts suggérés{" "}
-                <Text style={s.suggHint}>(à valider)</Text>
-              </Text>
-
-              {result.targets.map((t) => (
-                <View key={t.id} style={s.targetCard} testID={`pilot-target-${t.id}`}>
-                  <View style={s.targetHead}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={s.targetName}>{t.name}</Text>
-                      <Text style={s.targetMeta}>
-                        {t.type} · {t.city}
-                        {t.country ? `, ${t.country}` : ""}
-                      </Text>
-                    </View>
-                  </View>
-                  {!!t.snippet && <Text style={s.targetSnippet}>{t.snippet}</Text>}
-                  {!!t.contact_name && (
-                    <View style={s.contactRow}>
-                      <Ionicons name="person-outline" size={12} color={Colors.textMuted} />
-                      <Text style={s.contactText}>
-                        {t.contact_name}
-                        {t.contact_role ? ` · ${t.contact_role}` : ""}
-                      </Text>
-                    </View>
-                  )}
-                  {(t.tags || []).length > 0 && (
-                    <View style={s.tagsRow}>
-                      {t.tags.slice(0, 4).map((tag, i) => (
-                        <View key={i} style={s.tagChip}>
-                          <Text style={s.tagText}>{tag}</Text>
-                        </View>
-                      ))}
-                    </View>
-                  )}
-
-                  <View style={s.actionRow}>
-                    <TouchableOpacity
-                      testID={`pilot-act-email-${t.id}`}
-                      style={[s.actBtn, { backgroundColor: Colors.pilot }]}
-                      onPress={() => openAction(t, "email")}
-                      activeOpacity={0.85}
-                    >
-                      <Ionicons name="mail-outline" size={14} color="#fff" />
-                      <Text style={s.actBtnText}>Email</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      testID={`pilot-act-whatsapp-${t.id}`}
-                      style={[s.actBtn, { backgroundColor: "#25D366" }]}
-                      onPress={() => openAction(t, "whatsapp")}
-                      activeOpacity={0.85}
-                    >
-                      <Ionicons name="logo-whatsapp" size={14} color="#fff" />
-                      <Text style={s.actBtnText}>WhatsApp</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      testID={`pilot-act-linkedin-${t.id}`}
-                      style={[s.actBtn, { backgroundColor: "#0A66C2" }]}
-                      onPress={() => openAction(t, "linkedin")}
-                      activeOpacity={0.85}
-                    >
-                      <Ionicons name="logo-linkedin" size={14} color="#fff" />
-                      <Text style={s.actBtnText}>LinkedIn</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              ))}
-            </View>
-          )}
-        </ScrollView>
-      </KeyboardAvoidingView>
-
-      {/* Action Modal */}
+      {/* Action Modal (reused from previous Pilot version) */}
       <Modal
         visible={!!activeTarget}
         animationType="slide"
         transparent
         onRequestClose={closeModal}
       >
-        <View style={s.modalBackdrop}>
-          <View style={s.modalCard}>
-            <View style={s.modalHead}>
+        <View style={mod.backdrop}>
+          <View style={mod.card}>
+            <View style={mod.head}>
               <View style={{ flex: 1 }}>
-                <Text style={s.modalTitle}>
+                <Text style={mod.title}>
                   {activeChannel === "email"
                     ? "Email à"
                     : activeChannel === "whatsapp"
@@ -420,13 +264,13 @@ export default function PilotScreen() {
                     : "LinkedIn à"}{" "}
                   {activeTarget?.name}
                 </Text>
-                <Text style={s.modalSub}>
+                <Text style={mod.sub}>
                   {activeChannel === "email" && activeTarget?.email}
                   {activeChannel === "whatsapp" && activeTarget?.phone}
                   {activeChannel === "linkedin" && (activeTarget?.contact_name || "—")}
                 </Text>
               </View>
-              <TouchableOpacity onPress={closeModal} style={s.closeBtn} testID="pilot-close-modal">
+              <TouchableOpacity onPress={closeModal} style={mod.closeBtn} testID="pilot-close-modal">
                 <Ionicons name="close" size={20} color={Colors.text} />
               </TouchableOpacity>
             </View>
@@ -435,7 +279,7 @@ export default function PilotScreen() {
               <View style={{ alignItems: "center", paddingVertical: Spacing.xl }}>
                 <ActivityIndicator color={Colors.pilot} />
                 <Text style={{ color: Colors.textMuted, marginTop: 8, fontFamily: Fonts.body }}>
-                  Rédaction par l'IA…
+                  Rédaction par l&apos;IA…
                 </Text>
               </View>
             )}
@@ -448,10 +292,10 @@ export default function PilotScreen() {
               >
                 {activeChannel === "email" && (
                   <>
-                    <Text style={s.fieldLabel}>À</Text>
+                    <Text style={mod.fieldLabel}>À</Text>
                     <TextInput
                       testID="pilot-email-to"
-                      style={s.input}
+                      style={mod.input}
                       value={editedTo}
                       onChangeText={setEditedTo}
                       placeholder="contact@exemple.com"
@@ -459,38 +303,36 @@ export default function PilotScreen() {
                       autoCapitalize="none"
                       keyboardType="email-address"
                     />
-                    <Text style={s.fieldLabel}>Objet</Text>
+                    <Text style={mod.fieldLabel}>Objet</Text>
                     <TextInput
                       testID="pilot-email-subject"
-                      style={s.input}
+                      style={mod.input}
                       value={editedSubject}
                       onChangeText={setEditedSubject}
                     />
                   </>
                 )}
-                <Text style={s.fieldLabel}>Message</Text>
+                <Text style={mod.fieldLabel}>Message</Text>
                 <TextInput
                   testID="pilot-msg-body"
-                  style={[s.input, { minHeight: 200, textAlignVertical: "top" }]}
+                  style={[mod.input, { minHeight: 200, textAlignVertical: "top" }]}
                   value={editedBody}
                   onChangeText={setEditedBody}
                   multiline
                 />
 
                 {actionStatus && (
-                  <Text testID="pilot-action-status" style={s.statusText}>
+                  <Text testID="pilot-action-status" style={mod.statusText}>
                     {actionStatus}
                   </Text>
                 )}
 
-                <View style={s.modalActions}>
-                  <Text style={s.creditCost}>
-                    Coût : 1 crédit ({(0.099).toFixed(3)}€)
-                  </Text>
+                <View style={mod.actions}>
+                  <Text style={mod.creditCost}>Coût : 1 crédit (0,099 €)</Text>
                   {activeChannel === "email" && (
                     <TouchableOpacity
                       testID="pilot-send-email"
-                      style={[s.sendBtn, { backgroundColor: Colors.pilot }, sending && { opacity: 0.6 }]}
+                      style={[mod.sendBtn, { backgroundColor: Colors.pilot }, sending && { opacity: 0.6 }]}
                       onPress={sendEmail}
                       disabled={sending}
                     >
@@ -499,7 +341,7 @@ export default function PilotScreen() {
                       ) : (
                         <>
                           <Ionicons name="send" size={14} color="#fff" />
-                          <Text style={s.sendBtnText}>Envoyer l'email</Text>
+                          <Text style={mod.sendBtnText}>Envoyer l&apos;email</Text>
                         </>
                       )}
                     </TouchableOpacity>
@@ -507,7 +349,7 @@ export default function PilotScreen() {
                   {activeChannel === "whatsapp" && (
                     <TouchableOpacity
                       testID="pilot-open-whatsapp"
-                      style={[s.sendBtn, { backgroundColor: "#25D366" }, sending && { opacity: 0.6 }]}
+                      style={[mod.sendBtn, { backgroundColor: "#25D366" }, sending && { opacity: 0.6 }]}
                       onPress={openWhatsApp}
                       disabled={sending}
                     >
@@ -516,7 +358,7 @@ export default function PilotScreen() {
                       ) : (
                         <>
                           <Ionicons name="logo-whatsapp" size={14} color="#fff" />
-                          <Text style={s.sendBtnText}>Ouvrir WhatsApp</Text>
+                          <Text style={mod.sendBtnText}>Ouvrir WhatsApp</Text>
                         </>
                       )}
                     </TouchableOpacity>
@@ -524,7 +366,7 @@ export default function PilotScreen() {
                   {activeChannel === "linkedin" && (
                     <TouchableOpacity
                       testID="pilot-open-linkedin"
-                      style={[s.sendBtn, { backgroundColor: "#0A66C2" }, sending && { opacity: 0.6 }]}
+                      style={[mod.sendBtn, { backgroundColor: "#0A66C2" }, sending && { opacity: 0.6 }]}
                       onPress={openLinkedIn}
                       disabled={sending}
                     >
@@ -533,7 +375,7 @@ export default function PilotScreen() {
                       ) : (
                         <>
                           <Ionicons name="logo-linkedin" size={14} color="#fff" />
-                          <Text style={s.sendBtnText}>Copier + ouvrir LinkedIn</Text>
+                          <Text style={mod.sendBtnText}>Copier + ouvrir LinkedIn</Text>
                         </>
                       )}
                     </TouchableOpacity>
@@ -544,108 +386,205 @@ export default function PilotScreen() {
           </View>
         </View>
       </Modal>
-    </SafeAreaView>
+    </>
   );
 }
 
-const s = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: Colors.bg },
-  header: {
-    flexDirection: "row", alignItems: "center",
-    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.sm,
-    borderBottomWidth: 1, borderBottomColor: Colors.border,
-    backgroundColor: Colors.bgSecondary,
-  },
-  headerLogo: { width: 110, height: 50 },
-  creditBadge: {
-    flexDirection: "row", alignItems: "center", gap: 4,
-    paddingHorizontal: 10, paddingVertical: 6,
-    backgroundColor: Colors.pilotSoft, borderRadius: Radii.pill,
-    borderWidth: 1, borderColor: Colors.pilot,
-  },
-  creditText: { fontSize: 12, color: Colors.pilotDark, fontFamily: Fonts.bodyMedium, fontWeight: "700" },
-  titleBig: {
-    fontFamily: Fonts.headingBold,
-    fontSize: 26, color: Colors.text, lineHeight: 32, marginBottom: 6,
-  },
-  subtitle: { fontFamily: Fonts.body, fontSize: 14, color: Colors.textSecondary, marginBottom: Spacing.md, lineHeight: 20 },
-  searchRow: { flexDirection: "row", gap: Spacing.sm, alignItems: "center" },
-  searchInput: {
-    flex: 1, borderWidth: 1, borderColor: Colors.border,
-    borderRadius: Radii.md, paddingHorizontal: Spacing.md, paddingVertical: 12,
-    fontSize: 14, color: Colors.text, backgroundColor: Colors.bgSecondary,
-    fontFamily: Fonts.body,
-  },
-  searchBtn: {
-    width: 48, height: 46, borderRadius: Radii.md,
-    backgroundColor: Colors.pilot, alignItems: "center", justifyContent: "center",
-  },
-  label: { fontSize: 11, color: Colors.textSecondary, textTransform: "uppercase", letterSpacing: 1, marginBottom: Spacing.sm, fontFamily: Fonts.bodyMedium, fontWeight: "700" },
-  suggestion: {
-    flexDirection: "row", alignItems: "center", gap: 8,
-    backgroundColor: Colors.bgSecondary,
-    borderWidth: 1, borderColor: Colors.border,
-    borderRadius: Radii.md, padding: Spacing.md, marginBottom: Spacing.sm,
-  },
-  suggestionText: { fontFamily: Fonts.body, fontSize: 14, color: Colors.text },
-  err: { color: Colors.error, marginTop: Spacing.sm, fontFamily: Fonts.body },
-  interpretCard: {
-    flexDirection: "row", gap: 8, alignItems: "flex-start",
-    backgroundColor: Colors.pilotSoft, padding: Spacing.md,
-    borderRadius: Radii.md, borderLeftWidth: 3, borderLeftColor: Colors.pilot,
-    marginBottom: Spacing.md,
-  },
-  interpretText: { flex: 1, fontFamily: Fonts.body, fontSize: 13, color: Colors.text, lineHeight: 18 },
-  sectionTitle: {
-    fontFamily: Fonts.headingBold, fontSize: 16, color: Colors.text, marginBottom: Spacing.sm,
-  },
-  suggHint: { fontFamily: Fonts.body, fontSize: 11, color: Colors.textMuted, fontWeight: "400" },
-  targetCard: {
-    backgroundColor: Colors.bgSecondary, borderWidth: 1, borderColor: Colors.border,
-    borderRadius: Radii.lg, padding: Spacing.md, marginBottom: Spacing.sm,
-  },
-  targetHead: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
-  targetName: { fontFamily: Fonts.headingBold, fontSize: 15, color: Colors.text },
-  targetMeta: { fontFamily: Fonts.body, fontSize: 12, color: Colors.textMuted, marginTop: 2 },
-  targetSnippet: { fontFamily: Fonts.body, fontSize: 13, color: Colors.textSecondary, marginTop: 6, lineHeight: 18 },
-  contactRow: { flexDirection: "row", alignItems: "center", gap: 5, marginTop: Spacing.xs },
-  contactText: { fontFamily: Fonts.body, fontSize: 12, color: Colors.textSecondary },
-  tagsRow: { flexDirection: "row", flexWrap: "wrap", gap: 4, marginTop: Spacing.sm },
-  tagChip: { backgroundColor: Colors.bgTertiary, paddingHorizontal: 8, paddingVertical: 2, borderRadius: Radii.pill },
-  tagText: { fontSize: 10, color: Colors.textSecondary, fontFamily: Fonts.body },
-  actionRow: { flexDirection: "row", gap: 6, marginTop: Spacing.md },
-  actBtn: {
-    flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5,
-    paddingVertical: 9, borderRadius: Radii.md,
-  },
-  actBtnText: { color: "#fff", fontSize: 12, fontFamily: Fonts.bodyMedium, fontWeight: "700" },
+function TargetsList({
+  targets,
+  onOpenAction,
+}: {
+  targets: Target[];
+  onOpenAction: (t: Target, c: Channel) => void;
+}) {
+  return (
+    <View style={list.wrap}>
+      {targets.map((t) => (
+        <View key={t.id} style={list.card} testID={`pilot-target-${t.id}`}>
+          <View style={{ flex: 1 }}>
+            <Text style={list.name}>{t.name}</Text>
+            <Text style={list.meta}>
+              {t.type} · {t.city}
+              {t.country ? `, ${t.country}` : ""}
+            </Text>
+          </View>
+          {!!t.snippet && <Text style={list.snippet}>{t.snippet}</Text>}
+          {!!t.contact_name && (
+            <View style={list.row}>
+              <Ionicons name="person-outline" size={12} color={Colors.textMuted} />
+              <Text style={list.rowText}>
+                {t.contact_name}
+                {t.contact_role ? ` · ${t.contact_role}` : ""}
+              </Text>
+            </View>
+          )}
+          {(t.tags || []).length > 0 && (
+            <View style={list.tags}>
+              {t.tags.slice(0, 4).map((tag, i) => (
+                <View key={i} style={list.tag}>
+                  <Text style={list.tagText}>{tag}</Text>
+                </View>
+              ))}
+            </View>
+          )}
+          <View style={list.actions}>
+            <TouchableOpacity
+              testID={`pilot-act-email-${t.id}`}
+              style={[list.actBtn, { backgroundColor: Colors.pilot }]}
+              onPress={() => onOpenAction(t, "email")}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="mail-outline" size={14} color="#fff" />
+              <Text style={list.actText}>Email</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              testID={`pilot-act-whatsapp-${t.id}`}
+              style={[list.actBtn, { backgroundColor: "#25D366" }]}
+              onPress={() => onOpenAction(t, "whatsapp")}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="logo-whatsapp" size={14} color="#fff" />
+              <Text style={list.actText}>WhatsApp</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              testID={`pilot-act-linkedin-${t.id}`}
+              style={[list.actBtn, { backgroundColor: "#0A66C2" }]}
+              onPress={() => onOpenAction(t, "linkedin")}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="logo-linkedin" size={14} color="#fff" />
+              <Text style={list.actText}>LinkedIn</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      ))}
+    </View>
+  );
+}
 
-  // Modal
-  modalBackdrop: {
-    flex: 1, backgroundColor: "rgba(0,0,0,0.4)", justifyContent: "flex-end",
-  },
-  modalCard: {
+const list = StyleSheet.create({
+  wrap: { gap: Spacing.sm, marginTop: 4 },
+  card: {
     backgroundColor: Colors.bgSecondary,
-    borderTopLeftRadius: 20, borderTopRightRadius: 20,
-    padding: Spacing.lg, paddingBottom: Spacing.xl,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radii.lg,
+    padding: Spacing.md,
+    borderLeftWidth: 3,
+    borderLeftColor: Colors.pilot,
+  },
+  name: { fontFamily: Fonts.headingBold, fontSize: 15, color: Colors.text },
+  meta: { fontFamily: Fonts.body, fontSize: 12, color: Colors.textMuted, marginTop: 2 },
+  snippet: {
+    fontFamily: Fonts.body,
+    fontSize: 13,
+    color: Colors.textSecondary,
+    marginTop: 6,
+    lineHeight: 18,
+  },
+  row: { flexDirection: "row", alignItems: "center", gap: 5, marginTop: Spacing.xs },
+  rowText: { fontFamily: Fonts.body, fontSize: 12, color: Colors.textSecondary },
+  tags: { flexDirection: "row", flexWrap: "wrap", gap: 4, marginTop: Spacing.sm },
+  tag: {
+    backgroundColor: Colors.bgTertiary,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: Radii.pill,
+  },
+  tagText: { fontSize: 10, color: Colors.textSecondary, fontFamily: Fonts.body },
+  actions: { flexDirection: "row", gap: 6, marginTop: Spacing.md },
+  actBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+    paddingVertical: 9,
+    borderRadius: Radii.md,
+  },
+  actText: { color: "#fff", fontSize: 12, fontFamily: Fonts.bodyMedium, fontWeight: "700" },
+});
+
+const mod = StyleSheet.create({
+  creditBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: Colors.pilotSoft,
+    borderRadius: Radii.pill,
+    borderWidth: 1,
+    borderColor: Colors.pilot,
+  },
+  creditText: {
+    fontSize: 12,
+    color: Colors.pilotDark,
+    fontFamily: Fonts.bodyMedium,
+    fontWeight: "700",
+  },
+  backdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)", justifyContent: "flex-end" },
+  card: {
+    backgroundColor: Colors.bgSecondary,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: Spacing.lg,
+    paddingBottom: Spacing.xl,
     maxHeight: "92%",
   },
-  modalHead: { flexDirection: "row", alignItems: "flex-start", marginBottom: Spacing.md, gap: Spacing.sm },
-  modalTitle: { fontFamily: Fonts.headingBold, fontSize: 17, color: Colors.text },
-  modalSub: { fontFamily: Fonts.body, fontSize: 12, color: Colors.textMuted, marginTop: 2 },
-  closeBtn: { width: 32, height: 32, borderRadius: 16, backgroundColor: Colors.bgTertiary, alignItems: "center", justifyContent: "center" },
-  fieldLabel: { fontFamily: Fonts.bodyMedium, fontSize: 11, color: Colors.textSecondary, textTransform: "uppercase", letterSpacing: 1, marginTop: Spacing.sm, marginBottom: 6, fontWeight: "700" },
-  input: {
-    borderWidth: 1, borderColor: Colors.border, borderRadius: Radii.md,
-    paddingHorizontal: Spacing.md, paddingVertical: 12, fontSize: 14,
-    color: Colors.text, backgroundColor: Colors.bg, fontFamily: Fonts.body,
+  head: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    marginBottom: Spacing.md,
+    gap: Spacing.sm,
   },
-  statusText: { fontFamily: Fonts.body, fontSize: 13, color: Colors.textSecondary, marginTop: Spacing.sm, lineHeight: 18 },
-  modalActions: { marginTop: Spacing.md, gap: Spacing.sm, alignItems: "stretch" },
+  title: { fontFamily: Fonts.headingBold, fontSize: 17, color: Colors.text },
+  sub: { fontFamily: Fonts.body, fontSize: 12, color: Colors.textMuted, marginTop: 2 },
+  closeBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: Colors.bgTertiary,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  fieldLabel: {
+    fontFamily: Fonts.bodyMedium,
+    fontSize: 11,
+    color: Colors.textSecondary,
+    textTransform: "uppercase",
+    letterSpacing: 1,
+    marginTop: Spacing.sm,
+    marginBottom: 6,
+    fontWeight: "700",
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radii.md,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 12,
+    fontSize: 14,
+    color: Colors.text,
+    backgroundColor: Colors.bg,
+    fontFamily: Fonts.body,
+  },
+  statusText: {
+    fontFamily: Fonts.body,
+    fontSize: 13,
+    color: Colors.textSecondary,
+    marginTop: Spacing.sm,
+    lineHeight: 18,
+  },
+  actions: { marginTop: Spacing.md, gap: Spacing.sm, alignItems: "stretch" },
   creditCost: { fontFamily: Fonts.body, fontSize: 11, color: Colors.textMuted, textAlign: "right" },
   sendBtn: {
-    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6,
-    paddingVertical: 13, borderRadius: Radii.md,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingVertical: 13,
+    borderRadius: Radii.md,
   },
   sendBtnText: { color: "#fff", fontFamily: Fonts.bodyMedium, fontWeight: "700", fontSize: 14 },
 });
