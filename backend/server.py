@@ -1162,7 +1162,125 @@ async def pilot_actions(current_user: Dict[str, Any] = Depends(get_current_user)
     return {"items": items}
 
 
-app.include_router(api)
+# ---------- Dashboard metrics (EtOH Score™ + KPIs + Level) ----------
+@api.get("/dashboard/metrics")
+async def dashboard_metrics(current_user: Dict[str, Any] = Depends(get_current_user)):
+    """Aggregated business activity → EtOH Score™, weekly KPIs, level, sprint progress."""
+    uid = current_user["user_id"]
+    now = _now()
+    week_ago = now - timedelta(days=7)
+
+    # --- Aggregates from action_log + pilot_searches ---
+    week_actions_pipeline = [
+        {"$match": {"user_id": uid, "created_at": {"$gte": week_ago}}},
+        {"$group": {"_id": "$action", "count": {"$sum": 1}}},
+    ]
+    week_action_counts: Dict[str, int] = {}
+    async for doc in db.action_log.aggregate(week_actions_pipeline):
+        week_action_counts[doc["_id"]] = doc["count"]
+
+    emails_sent = week_action_counts.get("send_email", 0)
+    whatsapp_sent = week_action_counts.get("open_whatsapp", 0)
+    linkedin_sent = week_action_counts.get("open_linkedin", 0)
+    campaigns_sent = emails_sent + whatsapp_sent + linkedin_sent
+
+    # Lifetime totals (for the Level)
+    total_actions = await db.action_log.count_documents({"user_id": uid})
+    total_searches = await db.pilot_searches.count_documents({"user_id": uid})
+    total_studio = await db.studio_outputs.count_documents({"user_id": uid}) if hasattr(db, "studio_outputs") else 0
+    try:
+        total_studio = await db.studio_outputs.count_documents({"user_id": uid})
+    except Exception:
+        total_studio = 0
+    try:
+        total_coach = await db.coach_conversations.count_documents({"user_id": uid})
+    except Exception:
+        total_coach = 0
+
+    # Targets identified this week (from this-week's searches)
+    week_targets = 0
+    distinct_regions = set()
+    cursor = db.pilot_searches.find(
+        {"user_id": uid, "created_at": {"$gte": week_ago}}, {"_id": 0, "targets": 1, "query": 1}
+    )
+    async for s in cursor:
+        week_targets += len(s.get("targets", []))
+        # crude region detection: take last word of query
+        q = (s.get("query") or "").strip()
+        if q:
+            distinct_regions.add(q.lower().split()[-1])
+
+    # Distributors contacted this week (target_type in payload — best effort)
+    distributors_contacted = 0
+    async for a in db.action_log.find(
+        {"user_id": uid, "created_at": {"$gte": week_ago},
+         "action": {"$in": ["send_email", "open_whatsapp", "open_linkedin"]}},
+        {"_id": 0, "payload": 1}
+    ):
+        # we don't always know target.type at log time; rough proxy: count all as "distributors" if no info
+        distributors_contacted += 1
+    # The above duplicates campaigns_sent; refine: treat distributors_contacted as outbound to distinct targets
+    distributors_contacted = min(distributors_contacted, campaigns_sent)
+
+    # --- Weekly targets (goals) ---
+    GOAL_PROSPECTS = 50
+    GOAL_CAMPAIGNS = 5
+    GOAL_DISTRIBUTORS = 20
+
+    # --- EtOH Score™ — composite, capped at 100 ---
+    def _pct(n, d):
+        return min(100, int(round(100 * n / d))) if d > 0 else 0
+
+    score_components = {
+        "prospects": _pct(week_targets, GOAL_PROSPECTS),         # max 100
+        "campaigns": _pct(campaigns_sent, GOAL_CAMPAIGNS),
+        "distributors": _pct(distributors_contacted, GOAL_DISTRIBUTORS),
+        "markets": min(100, len(distinct_regions) * 25),         # 4 regions → 100
+    }
+    etoh_score = int(round(sum(score_components.values()) / len(score_components)))
+
+    # --- Level (lifetime points) ---
+    # 1 point per action (search/draft/send/coach msg/studio gen)
+    lifetime_points = total_actions + total_searches + total_studio + total_coach
+    if lifetime_points >= 1000:
+        level = {"name": "International Brand", "icon": "💎", "min": 1000, "next": None, "progress_pct": 100}
+    elif lifetime_points >= 500:
+        level = {"name": "Exporter", "icon": "🥇", "min": 500, "next": 1000,
+                 "progress_pct": int(round(100 * (lifetime_points - 500) / 500))}
+    elif lifetime_points >= 100:
+        level = {"name": "Grower", "icon": "🥈", "min": 100, "next": 500,
+                 "progress_pct": int(round(100 * (lifetime_points - 100) / 400))}
+    else:
+        level = {"name": "Explorer", "icon": "🥉", "min": 0, "next": 100,
+                 "progress_pct": int(round(100 * lifetime_points / 100)) if lifetime_points else 0}
+
+    # --- Weekly Sprint (static template + live progress) ---
+    sprint = [
+        {"id": "prospects", "title": "Identifier 10 prospects qualifiés",
+         "current": min(week_targets, 10), "target": 10, "done": week_targets >= 10},
+        {"id": "email", "title": "Envoyer 1 campagne email",
+         "current": min(emails_sent, 1), "target": 1, "done": emails_sent >= 1},
+        {"id": "social", "title": "Publier 2 contenus (Studio)",
+         "current": min(total_studio, 2), "target": 2, "done": total_studio >= 2},
+        {"id": "crm", "title": "Contacter 5 nouveaux contacts",
+         "current": min(campaigns_sent, 5), "target": 5, "done": campaigns_sent >= 5},
+    ]
+    done_count = sum(1 for s in sprint if s["done"])
+    sprint_pct = int(round(100 * done_count / len(sprint)))
+
+    return {
+        "etoh_score": etoh_score,
+        "score_components": score_components,
+        "kpis": {
+            "prospects_identified": {"current": week_targets, "target": GOAL_PROSPECTS},
+            "campaigns_sent": {"current": campaigns_sent, "target": GOAL_CAMPAIGNS},
+            "distributors_contacted": {"current": distributors_contacted, "target": GOAL_DISTRIBUTORS},
+            "markets_analyzed": {"current": len(distinct_regions), "target": 4},
+            "opportunities_detected": {"current": week_targets, "target": None},
+        },
+        "level": {**level, "lifetime_points": lifetime_points},
+        "sprint": {"items": sprint, "progress_pct": sprint_pct},
+    }
 
 # ---------------------------------------------------------------------------
 # Mount router & middleware
@@ -1185,6 +1303,9 @@ async def on_startup():
     await db.user_sessions.create_index("user_id")
     await db.user_sessions.create_index("expires_at", expireAfterSeconds=0)
     logger.info("EtOH backend started — indexes ensured.")
+
+
+app.include_router(api)
 
 
 @app.on_event("shutdown")

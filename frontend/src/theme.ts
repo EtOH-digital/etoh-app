@@ -17,8 +17,8 @@ export const Colors = {
   warning: "#b45309",
   error: "#b91c1c",
 
-  // EtOH master brand
-  brandPrimary: "#1f2937",   // near-black used in the wordmark
+  // Brand (matches the EtOH logo variants provided by the user)
+  brandPrimary: "#2B2B2B",   // CTA dark grey — used for primary buttons
   brandPrimarySoft: "#F2F1ED",
 
   // Module colors — sampled from the official logos

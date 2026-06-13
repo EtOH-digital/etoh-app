@@ -77,8 +77,8 @@ export default function Login() {
             />
             <HexDots size={10} gap={12} />
             <Text style={s.tagline}>
-              Apprendre. S'équiper. Exécuter.{"\n"}
-              Vendez plus de vin, bière & spiritueux.
+              Vendez plus, vendez mieux.{"\n"}
+              Learn. Create. Sell.
             </Text>
           </View>
 
