@@ -1513,6 +1513,165 @@ Return ONLY strict JSON (no markdown, no ```):
     return {"synthesis": synthesis}
 
 
+# ---------- Auto-extract business info from free-form user messages ----------
+class AutoExtractIn(BaseModel):
+    message: str = Field(..., min_length=2, max_length=4000)
+    source: Optional[str] = "chat"  # coach | studio | pilot | chat
+
+
+_EXTRACT_FIELDS = [
+    "business_name",
+    "business_type",
+    "region",
+    "role",
+    "main_products",
+    "revenue",
+    "avg_bottle_price",
+    "avg_case_price",
+    "objectives",
+    "products",
+    "target_countries",
+    "target_channels",
+]
+
+_EXTRACT_ENUMS = {
+    "business_type": [
+        "winery", "cooperative", "merchant", "importer", "distributor",
+        "restaurant", "brewery", "distillery", "wine_shop", "other",
+    ],
+    "revenue": ["<100k", "100k-500k", "500k-2M", "2M-10M", "10M+"],
+    "objectives": [
+        "distributors", "export", "clients", "visibility", "content", "time",
+    ],
+    "products": [
+        "red_wine", "white_wine", "rose", "sparkling", "spirits",
+        "beer", "alcohol_free", "other",
+    ],
+    "target_channels": [
+        "CHR", "Cavistes", "GMS", "E-commerce", "Export",
+        "Vente directe", "Marketplaces",
+    ],
+}
+
+
+@api.post("/profile/auto-extract")
+async def profile_auto_extract(
+    payload: AutoExtractIn,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Claude-Cowork-style passive memory.
+
+    Looks at the user's free-form chat message and extracts any new business
+    profile info (business name, region, products, revenue, objectives…),
+    then merges it into business_profile *without overwriting* fields already
+    filled by the user. Returns the list of fields that were just learned.
+    """
+    bp = current_user.get("business_profile") or {}
+
+    # Build a list of *missing* fields so we don't bother the LLM with the rest
+    def is_empty(k: str) -> bool:
+        v = bp.get(k)
+        if v is None:
+            return True
+        if isinstance(v, (list, str)) and len(v) == 0:
+            return True
+        return False
+
+    missing = [f for f in _EXTRACT_FIELDS if is_empty(f)]
+    if not missing:
+        return {"updated": {}, "learned_fields": []}
+
+    enum_lines = []
+    for f in missing:
+        if f in _EXTRACT_ENUMS:
+            enum_lines.append(f"- {f}: one of {_EXTRACT_ENUMS[f]}")
+        elif f in ("objectives", "products", "target_countries", "target_channels"):
+            enum_lines.append(f"- {f}: array of strings")
+        else:
+            enum_lines.append(f"- {f}: string")
+
+    extract_prompt = (
+        "You are a strict information extractor for a wine/spirits commercial app. "
+        "Read the user's message and extract ONLY explicit factual info about THEIR business. "
+        "Never invent. Never guess. If the message is generic / not about their business, "
+        "return an empty JSON object.\n\n"
+        "IMPORTANT for country names: ALWAYS use the French spelling "
+        "(France, Belgique, Allemagne, Royaume-Uni, USA, Canada, Suisse, Japon, Chine, Italie, Espagne, Pays-Bas, Suède, Norvège, Danemark…).\n\n"
+        "Fields to consider (only include those clearly stated in the message):\n"
+        + "\n".join(enum_lines)
+        + "\n\nReturn STRICT JSON only (no markdown, no ``` fences). "
+        "Keys must match the field names above. Omit fields that are not stated.\n\n"
+        + f'User message:\n"""{payload.message.strip()}"""'
+    )
+
+    chat = _make_chat(
+        session_id=f"extract_{current_user['user_id']}_{uuid.uuid4().hex[:6]}",
+        system_message=(
+            "You output ONLY valid JSON. No prose, no markdown. "
+            "If nothing relevant, output {}."
+        ),
+    )
+    try:
+        raw = await chat.send_message(UserMessage(text=extract_prompt))
+    except Exception as e:
+        logging.warning(f"auto-extract LLM failure: {e}")
+        return {"updated": {}, "learned_fields": []}
+
+    import json
+    import re
+    cleaned = re.sub(r"^```(?:json)?|```$", "", (raw or "").strip(), flags=re.MULTILINE).strip()
+    try:
+        parsed = json.loads(cleaned) if cleaned else {}
+    except Exception:
+        parsed = {}
+    if not isinstance(parsed, dict):
+        parsed = {}
+
+    # Sanitize: only accept fields that are (a) in our allowlist AND (b) still empty
+    updates: Dict[str, Any] = {}
+    for f in missing:
+        if f not in parsed:
+            continue
+        val = parsed[f]
+        if val is None:
+            continue
+        # type / enum validation
+        if f in _EXTRACT_ENUMS and isinstance(_EXTRACT_ENUMS[f], list):
+            allowed = _EXTRACT_ENUMS[f]
+            if f in ("objectives", "products", "target_channels"):
+                if not isinstance(val, list):
+                    continue
+                val = [v for v in val if v in allowed]
+                if not val:
+                    continue
+            else:
+                if val not in allowed:
+                    continue
+        if f in ("target_countries",):
+            if not isinstance(val, list):
+                continue
+            val = [str(v).strip() for v in val if str(v).strip()]
+            if not val:
+                continue
+        if isinstance(val, str):
+            val = val.strip()
+            if not val:
+                continue
+        updates[f] = val
+
+    if not updates:
+        return {"updated": {}, "learned_fields": []}
+
+    mongo_set = {f"business_profile.{k}": v for k, v in updates.items()}
+    mongo_set["business_profile.last_auto_learn_at"] = _now()
+    mongo_set["business_profile.last_auto_learn_fields"] = list(updates.keys())
+    mongo_set["business_profile.last_auto_learn_source"] = payload.source
+    await db.users.update_one(
+        {"user_id": current_user["user_id"]}, {"$set": mongo_set}
+    )
+    return {"updated": updates, "learned_fields": list(updates.keys())}
+
+
 # ---------- US-034 — CRM léger ----------
 class CrmContactStatus(str):
     new = "new"

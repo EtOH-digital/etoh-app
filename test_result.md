@@ -103,6 +103,17 @@
 #====================================================================================================
 
 frontend:
+  - task: "Profile page rebuilt to mirror onboarding + passive memory (auto-extract)"
+    implemented: true
+    working: true
+    file: "frontend/app/(tabs)/profile.tsx, frontend/src/components/ChatScreen.tsx, backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "Rewrote profile.tsx with the SAME sections/options as the onboarding wizard: Métier tiles (10 options w/ emojis), CA radio rows, Objectifs check rows, Produits big chips, Prix/Pays/Canaux small chips. Added debounced (800ms) auto-save on every field change — top of the screen now shows a profile-completion progress bar + 'Enregistré automatiquement' indicator. Added a Claude-Cowork-style 'EtOH a appris automatiquement: …' banner that surfaces what was auto-learned. Implemented backend endpoint POST /api/profile/auto-extract that uses the LLM to extract business info from any chat message (only fills empty fields, never overwrites). Hooked into ChatScreen so every user message in Coach/Studio/Pilot fires the extractor fire-and-forget and shows a transient learning banner. Verified visually + via curl (returned learned_fields: ['target_countries'] from a French free-text message)."
   - task: "Unified ChatGPT-like UX across Coach / Studio / Pilot (true unification)"
     implemented: true
     working: true

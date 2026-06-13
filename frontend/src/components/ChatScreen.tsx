@@ -18,6 +18,8 @@ import * as Clipboard from "expo-clipboard";
 import { Ionicons } from "@expo/vector-icons";
 
 import { Colors, Spacing, Radii, Fonts } from "@/src/theme";
+import { apiFetch } from "@/src/api/client";
+import { useAuth } from "@/src/auth/AuthContext";
 
 export type ChatMsg = {
   role: "user" | "assistant";
@@ -65,9 +67,11 @@ export default function ChatScreen({
   onSend,
 }: Props) {
   const params = useLocalSearchParams<{ prompt?: string }>();
+  const { refresh } = useAuth();
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [learned, setLearned] = useState<string[] | null>(null);
   const scrollRef = useRef<ScrollView | null>(null);
   const handledPromptRef = useRef<string | null>(null);
 
@@ -89,6 +93,22 @@ export default function ChatScreen({
     setInput("");
     setMessages((m) => [...m, { role: "user", content }]);
     setLoading(true);
+    // Fire-and-forget passive memory: extract business info from this message.
+    (async () => {
+      try {
+        const r = await apiFetch<{ learned_fields: string[] }>("/profile/auto-extract", {
+          method: "POST",
+          body: JSON.stringify({ message: content, source: testID }),
+        });
+        if (r?.learned_fields?.length) {
+          setLearned(r.learned_fields);
+          refresh().catch(() => {});
+          setTimeout(() => setLearned(null), 6000);
+        }
+      } catch {
+        // silent — passive memory never blocks the user
+      }
+    })();
     try {
       await onSend(content, {
         appendAssistant: (msg) => setMessages((m) => [...m, msg]),
@@ -126,6 +146,14 @@ export default function ChatScreen({
         behavior={Platform.OS === "ios" ? "padding" : undefined}
         keyboardVerticalOffset={80}
       >
+        {learned && learned.length > 0 && (
+          <View style={[s.learnedBanner, { borderColor: color }]} testID={`${testID}-learned`}>
+            <Ionicons name="bulb-outline" size={14} color={color} />
+            <Text style={s.learnedText}>
+              J&apos;ai appris : <Text style={{ fontWeight: "700" }}>{labelLearned(learned)}</Text>. Sauvegardé sur votre profil.
+            </Text>
+          </View>
+        )}
         <ScrollView
           ref={scrollRef}
           style={{ flex: 1 }}
@@ -237,6 +265,19 @@ export default function ChatScreen({
 
 const s = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bg },
+  learnedBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 8,
+    backgroundColor: Colors.bgSecondary,
+    borderLeftWidth: 3,
+    marginHorizontal: Spacing.md,
+    marginTop: Spacing.sm,
+    borderRadius: Radii.sm,
+  },
+  learnedText: { flex: 1, fontFamily: Fonts.body, fontSize: 12, color: Colors.textSecondary, lineHeight: 17 },
   header: {
     flexDirection: "row",
     alignItems: "center",
@@ -347,3 +388,23 @@ const s = StyleSheet.create({
     justifyContent: "center",
   },
 });
+
+
+const FIELD_LABELS_FR: Record<string, string> = {
+  business_name: "nom de l'entreprise",
+  business_type: "type d'activité",
+  region: "région",
+  role: "rôle",
+  main_products: "produits principaux",
+  revenue: "chiffre d'affaires",
+  avg_bottle_price: "prix bouteille",
+  avg_case_price: "prix carton",
+  objectives: "objectifs",
+  products: "gamme produits",
+  target_countries: "pays cibles",
+  target_channels: "canaux cibles",
+};
+
+function labelLearned(fields: string[]): string {
+  return fields.map((f) => FIELD_LABELS_FR[f] || f).join(", ");
+}
