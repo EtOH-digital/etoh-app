@@ -34,6 +34,10 @@ export default function Profile() {
   const [mainProducts, setMainProducts] = useState(bp.main_products || "");
   const [role, setRole] = useState(bp.role || "");
   const [language, setLanguage] = useState<"fr" | "en">(bp.language || "fr");
+  const [goalProspects, setGoalProspects] = useState(String((bp as any).goal_prospects ?? 50));
+  const [goalCampaigns, setGoalCampaigns] = useState(String((bp as any).goal_campaigns ?? 5));
+  const [goalDistributors, setGoalDistributors] = useState(String((bp as any).goal_distributors ?? 20));
+  const [goalMarkets, setGoalMarkets] = useState(String((bp as any).goal_markets ?? 4));
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
@@ -48,7 +52,11 @@ export default function Profile() {
         main_products: mainProducts.trim() || undefined,
         role: role.trim() || undefined,
         language,
-      });
+        goal_prospects: Math.max(1, parseInt(goalProspects, 10) || 50),
+        goal_campaigns: Math.max(1, parseInt(goalCampaigns, 10) || 5),
+        goal_distributors: Math.max(1, parseInt(goalDistributors, 10) || 20),
+        goal_markets: Math.max(1, parseInt(goalMarkets, 10) || 4),
+      } as any);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } finally {
@@ -154,6 +162,34 @@ export default function Profile() {
               <Text style={[s.chipText, language === "en" && { color: "#fff" }]}>English</Text>
             </TouchableOpacity>
           </View>
+
+          <Text style={s.label}>Langue</Text>
+          <View style={s.chipsRow}>
+            <TouchableOpacity
+              testID="profile-lang-fr"
+              style={[s.chip, language === "fr" && { backgroundColor: Colors.text, borderColor: Colors.text }]}
+              onPress={() => setLanguage("fr")}
+            >
+              <Text style={[s.chipText, language === "fr" && { color: "#fff" }]}>Français</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              testID="profile-lang-en"
+              style={[s.chip, language === "en" && { backgroundColor: Colors.text, borderColor: Colors.text }]}
+              onPress={() => setLanguage("en")}
+            >
+              <Text style={[s.chipText, language === "en" && { color: "#fff" }]}>English</Text>
+            </TouchableOpacity>
+          </View>
+
+          <Text style={[s.sectionTitle, { marginTop: 32 }]}>Mes objectifs hebdomadaires</Text>
+          <Text style={[s.label, { marginTop: 8 }]}>Prospects identifiés / semaine</Text>
+          <TextInput testID="profile-goal-prospects" style={s.input} value={goalProspects} onChangeText={setGoalProspects} keyboardType="number-pad" />
+          <Text style={s.label}>Campagnes envoyées / semaine</Text>
+          <TextInput testID="profile-goal-campaigns" style={s.input} value={goalCampaigns} onChangeText={setGoalCampaigns} keyboardType="number-pad" />
+          <Text style={s.label}>Distributeurs contactés / semaine</Text>
+          <TextInput testID="profile-goal-distributors" style={s.input} value={goalDistributors} onChangeText={setGoalDistributors} keyboardType="number-pad" />
+          <Text style={s.label}>Marchés analysés / semaine</Text>
+          <TextInput testID="profile-goal-markets" style={s.input} value={goalMarkets} onChangeText={setGoalMarkets} keyboardType="number-pad" />
 
           <TouchableOpacity
             testID="profile-save"

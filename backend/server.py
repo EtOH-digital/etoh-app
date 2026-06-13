@@ -110,6 +110,11 @@ class BusinessProfileIn(BaseModel):
     main_products: Optional[str] = None
     role: Optional[str] = None
     language: Optional[Literal["fr", "en"]] = "fr"
+    # Customizable weekly sprint goals (per user)
+    goal_prospects: Optional[int] = Field(default=None, ge=1, le=500)
+    goal_campaigns: Optional[int] = Field(default=None, ge=1, le=100)
+    goal_distributors: Optional[int] = Field(default=None, ge=1, le=100)
+    goal_markets: Optional[int] = Field(default=None, ge=1, le=20)
 
 
 class CoachMessageIn(BaseModel):
@@ -1222,10 +1227,12 @@ async def dashboard_metrics(current_user: Dict[str, Any] = Depends(get_current_u
     # The above duplicates campaigns_sent; refine: treat distributors_contacted as outbound to distinct targets
     distributors_contacted = min(distributors_contacted, campaigns_sent)
 
-    # --- Weekly targets (goals) ---
-    GOAL_PROSPECTS = 50
-    GOAL_CAMPAIGNS = 5
-    GOAL_DISTRIBUTORS = 20
+    # --- Weekly targets (goals — customizable per user, defaults from etoh.io) ---
+    bp = current_user.get("business_profile") or {}
+    GOAL_PROSPECTS = int(bp.get("goal_prospects") or 50)
+    GOAL_CAMPAIGNS = int(bp.get("goal_campaigns") or 5)
+    GOAL_DISTRIBUTORS = int(bp.get("goal_distributors") or 20)
+    GOAL_MARKETS = int(bp.get("goal_markets") or 4)
 
     # --- EtOH Score™ — composite, capped at 100 ---
     def _pct(n, d):
@@ -1235,7 +1242,7 @@ async def dashboard_metrics(current_user: Dict[str, Any] = Depends(get_current_u
         "prospects": _pct(week_targets, GOAL_PROSPECTS),         # max 100
         "campaigns": _pct(campaigns_sent, GOAL_CAMPAIGNS),
         "distributors": _pct(distributors_contacted, GOAL_DISTRIBUTORS),
-        "markets": min(100, len(distinct_regions) * 25),         # 4 regions → 100
+        "markets": min(100, int(round(100 * len(distinct_regions) / max(1, GOAL_MARKETS)))),
     }
     etoh_score = int(round(sum(score_components.values()) / len(score_components)))
 
@@ -1275,7 +1282,7 @@ async def dashboard_metrics(current_user: Dict[str, Any] = Depends(get_current_u
             "prospects_identified": {"current": week_targets, "target": GOAL_PROSPECTS},
             "campaigns_sent": {"current": campaigns_sent, "target": GOAL_CAMPAIGNS},
             "distributors_contacted": {"current": distributors_contacted, "target": GOAL_DISTRIBUTORS},
-            "markets_analyzed": {"current": len(distinct_regions), "target": 4},
+            "markets_analyzed": {"current": len(distinct_regions), "target": GOAL_MARKETS},
             "opportunities_detected": {"current": week_targets, "target": None},
         },
         "level": {**level, "lifetime_points": lifetime_points},
