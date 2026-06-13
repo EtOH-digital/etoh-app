@@ -540,6 +540,13 @@ const s = StyleSheet.create({
   bvChipText: { fontFamily: Fonts.body, fontSize: 11, color: Colors.text },
   trainBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, backgroundColor: Colors.brandPrimary, borderRadius: Radii.md, paddingVertical: 12, marginTop: 12 },
   trainBtnText: { color: "#fff", fontFamily: Fonts.bodyMedium, fontWeight: "700", fontSize: 13 },
+  autoRow: { flexDirection: "row", alignItems: "center", gap: 12, marginTop: Spacing.md, padding: 12, borderWidth: 1, borderColor: Colors.border, borderRadius: Radii.md, backgroundColor: Colors.bgSecondary },
+  autoTitle: { fontFamily: Fonts.headingBold, fontSize: 14, color: Colors.text },
+  autoSub: { fontFamily: Fonts.body, fontSize: 11, color: Colors.textMuted, marginTop: 2, lineHeight: 16 },
+  toggle: { width: 44, height: 24, borderRadius: 12, backgroundColor: Colors.bgTertiary, padding: 2, justifyContent: "center" },
+  toggleOn: { backgroundColor: Colors.success },
+  toggleDot: { width: 20, height: 20, borderRadius: 10, backgroundColor: "#fff" },
+  toggleDotOn: { alignSelf: "flex-end" },
   label: { fontSize: 12, color: Colors.textSecondary, textTransform: "uppercase", letterSpacing: 1, marginBottom: Spacing.xs, marginTop: Spacing.md, fontWeight: "600" },
   input: {
     borderWidth: 1, borderColor: Colors.border, borderRadius: Radii.md,

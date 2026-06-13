@@ -848,19 +848,72 @@ async def credits_me(current_user: Dict[str, Any] = Depends(get_current_user)):
 
 
 async def _consume_credits(user_id: str, amount: int) -> int:
-    """Atomically deduct credits. Raises 402 if insufficient. Returns remaining."""
+    """Atomically deduct credits. Triggers auto-recharge if enabled and balance drops
+    below the configured threshold. Raises 402 if insufficient."""
     result = await db.users.find_one_and_update(
         {"user_id": user_id, "credits": {"$gte": amount}},
         {"$inc": {"credits": -amount}},
         return_document=True,
-        projection={"_id": 0, "credits": 1},
+        projection={"_id": 0, "credits": 1, "auto_recharge": 1, "stripe_customer_id": 1, "stripe_payment_method_id": 1},
     )
     if not result:
+        # Try emergency auto-recharge before failing
+        topped = await _try_auto_recharge(user_id)
+        if topped:
+            return await _consume_credits(user_id, amount)
         raise HTTPException(
             status_code=402,
             detail="Crédits insuffisants. Rechargez votre compte pour continuer.",
         )
+    # Schedule (non-blocking) auto-recharge if balance dropped below threshold
+    ar = result.get("auto_recharge") or {}
+    if ar.get("enabled") and result["credits"] <= int(ar.get("threshold") or 20) \
+            and result.get("stripe_customer_id") and result.get("stripe_payment_method_id"):
+        import asyncio as _asyncio
+        _asyncio.create_task(_try_auto_recharge(user_id))
     return int(result["credits"])
+
+
+async def _try_auto_recharge(user_id: str) -> bool:
+    """Best-effort off-session Stripe charge using the stored card. Returns True on success."""
+    if not STRIPE_SECRET_KEY:
+        return False
+    user = await db.users.find_one({"user_id": user_id}, {"_id": 0})
+    if not user:
+        return False
+    ar = user.get("auto_recharge") or {}
+    if not ar.get("enabled"):
+        return False
+    if not (user.get("stripe_customer_id") and user.get("stripe_payment_method_id")):
+        return False
+    pack = PACK_BY_ID.get(ar.get("pack_id") or "starter")
+    if not pack:
+        return False
+    try:
+        intent = stripe.PaymentIntent.create(
+            amount=int(round(pack["price_eur"] * 100)),
+            currency="eur",
+            customer=user["stripe_customer_id"],
+            payment_method=user["stripe_payment_method_id"],
+            off_session=True,
+            confirm=True,
+            description=f"EtOH auto-recharge — {pack['credits']} crédits",
+            metadata={"user_id": user_id, "pack_id": pack["id"], "credits": str(pack["credits"]), "kind": "auto_recharge"},
+        )
+        if intent.status == "succeeded":
+            await db.users.update_one({"user_id": user_id}, {"$inc": {"credits": pack["credits"]}})
+            await db.wallet_checkouts.insert_one({
+                "session_id": intent.id, "user_id": user_id, "pack_id": pack["id"],
+                "credits": pack["credits"], "amount_eur": pack["price_eur"],
+                "status": "paid", "kind": "auto_recharge", "paid_at": _now(), "created_at": _now(),
+            })
+            logger.info("Auto-recharge ok for %s: +%d credits", user_id, pack["credits"])
+            return True
+    except stripe.error.CardError as e:
+        logger.warning("Auto-recharge declined for %s: %s", user_id, e.user_message or str(e))
+    except Exception as e:
+        logger.warning("Auto-recharge failed for %s: %s", user_id, e)
+    return False
 
 
 async def _log_action(user_id: str, action: str, payload: Dict[str, Any], cost: int):
@@ -1686,6 +1739,8 @@ async def wallet_checkout(payload: CheckoutIn,
             mode="payment",
             payment_method_types=["card", "sepa_debit"],
             customer_email=current_user["email"],
+            customer_creation="always",
+            payment_intent_data={"setup_future_usage": "off_session"},
             line_items=[{
                 "price_data": {
                     "currency": "eur",
@@ -1745,10 +1800,22 @@ async def wallet_checkout_status(session_id: str,
             {"$set": {"status": "paid", "paid_at": _now()}},
         )
         if result.modified_count > 0:
-            await db.users.update_one(
-                {"user_id": current_user["user_id"]},
-                {"$inc": {"credits": record["credits"]}},
-            )
+            user_set: Dict[str, Any] = {}
+            if session.customer:
+                user_set["stripe_customer_id"] = session.customer if isinstance(session.customer, str) else session.customer.id
+            # Retrieve payment intent to grab the payment method id for off-session usage
+            try:
+                pi_id = session.payment_intent if isinstance(session.payment_intent, str) else (session.payment_intent and session.payment_intent.id)
+                if pi_id:
+                    pi = stripe.PaymentIntent.retrieve(pi_id)
+                    if pi.payment_method:
+                        user_set["stripe_payment_method_id"] = pi.payment_method if isinstance(pi.payment_method, str) else pi.payment_method.id
+            except Exception as e:
+                logger.warning("Could not retrieve PaymentIntent for off-session storage: %s", e)
+            update: Dict[str, Any] = {"$inc": {"credits": record["credits"]}}
+            if user_set:
+                update["$set"] = user_set
+            await db.users.update_one({"user_id": current_user["user_id"]}, update)
         return {"status": "paid", "credits_added": record["credits"]}
     return {"status": session.payment_status or "pending"}
 
