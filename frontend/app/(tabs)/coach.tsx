@@ -22,9 +22,9 @@ type Msg = { role: "user" | "assistant"; content: string };
 
 const SUGGESTIONS = [
   "Comment vendre plus en restaurants ?",
+  "Veille : tendances vin bio en Allemagne 2026",
   "Comment trouver des importateurs en Belgique ?",
-  "Comment préparer mon prochain salon ?",
-  "Comment lancer un nouveau millésime ?",
+  "Veille : concurrents en Champagne premium",
 ];
 
 export default function Coach() {
@@ -48,12 +48,25 @@ export default function Coach() {
     setLoading(true);
     try {
       const lang = user?.business_profile?.language || "fr";
-      const data = await apiFetch<{ session_id: string; reply: string }>("/coach/message", {
+      // Auto-trigger Tavily web research for keywords that need fresh market data
+      const needsResearch = /\b(tendance|tendances|march[ée]|concurrent|concurrence|veille|nouveau|2024|2025|2026|importateur|distributeur|trend|market|competitor)\b/i.test(content);
+      const endpoint = needsResearch ? "/coach/research" : "/coach/message";
+      const body = needsResearch
+        ? { query: content, language: lang }
+        : { session_id: sessionId, message: content, language: lang };
+      const data = await apiFetch<any>(endpoint, {
         method: "POST",
-        body: JSON.stringify({ session_id: sessionId, message: content, language: lang }),
+        body: JSON.stringify(body),
       });
-      setSessionId(data.session_id);
-      setMessages([...next, { role: "assistant", content: data.reply }]);
+      if (needsResearch) {
+        const sourcesBlock = (data.sources || [])
+          .map((s: any) => `- [${s.title}](${s.url})`).join("\n");
+        const reply = `🔎 **Veille web (Tavily)**\n\n${data.synthesis}\n\n${sourcesBlock ? "**Sources :**\n" + sourcesBlock : ""}`;
+        setMessages([...next, { role: "assistant", content: reply }]);
+      } else {
+        setSessionId(data.session_id);
+        setMessages([...next, { role: "assistant", content: data.reply }]);
+      }
     } catch (e: any) {
       setMessages([...next, { role: "assistant", content: `⚠️ ${e.message}` }]);
     } finally {

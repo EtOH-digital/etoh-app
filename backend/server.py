@@ -57,6 +57,9 @@ RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 RESEND_FROM_EMAIL = os.environ.get("RESEND_FROM_EMAIL", "noreply@pilot.etoh.fr")
 RESEND_FROM_NAME = os.environ.get("RESEND_FROM_NAME", "EtOH Pilot")
 
+# --- Tavily (web search for Coach veille concurrentielle) ---
+TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY", "")
+
 EMERGENT_SESSION_API = "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -289,6 +292,30 @@ def _studio_system(lang: str) -> str:
 
 def _pilot_system(lang: str) -> str:
     return SYSTEM_PROMPT_PILOT_FR if lang == "fr" else SYSTEM_PROMPT_PILOT_EN
+
+
+def _brand_voice_block(bp: Dict[str, Any], lang: str) -> str:
+    """Builds an inline Brand Voice section to inject into Studio / Pilot draft prompts."""
+    tone = bp.get("brand_voice_tone") or []
+    pers = bp.get("brand_voice_personality") or []
+    style = bp.get("brand_voice_style") or []
+    if not (tone or pers or style):
+        return ""
+    if lang == "fr":
+        return (
+            "\n\n--- BRAND VOICE (à respecter strictement) ---\n"
+            f"- Ton : {', '.join(tone) or 'professionnel'}\n"
+            f"- Personnalité : {', '.join(pers) or 'authentique'}\n"
+            f"- Style d'écriture : {', '.join(style) or 'phrases courtes'}\n"
+            "Réponds avec ce ton, cette personnalité et ce style.\n"
+        )
+    return (
+        "\n\n--- BRAND VOICE (strictly follow) ---\n"
+        f"- Tone: {', '.join(tone) or 'professional'}\n"
+        f"- Personality: {', '.join(pers) or 'authentic'}\n"
+        f"- Writing style: {', '.join(style) or 'short sentences'}\n"
+        "Reply using this tone, personality and style.\n"
+    )
 
 
 def _make_chat(session_id: str, system_message: str) -> LlmChat:
@@ -651,7 +678,7 @@ Task: {template_instruction}"""
 
     chat = _make_chat(
         session_id=f"studio_{current_user['user_id']}_{uuid.uuid4().hex[:8]}",
-        system_message=_studio_system(lang),
+        system_message=_studio_system(lang) + _brand_voice_block(bp, lang),
     )
     content = await chat.send_message(UserMessage(text=prompt_fr if lang == "fr" else prompt_en))
 
@@ -1064,7 +1091,7 @@ Reply ONLY with the message, no preamble."""
 
     chat = _make_chat(
         session_id=f"pilot_draft_{current_user['user_id']}_{uuid.uuid4().hex[:8]}",
-        system_message=_studio_system(lang),  # use Studio's copywriter system prompt
+        system_message=_studio_system(lang) + _brand_voice_block(bp, lang),
     )
     content = await chat.send_message(UserMessage(text=prompt_fr if lang == "fr" else prompt_en))
 
@@ -1536,6 +1563,86 @@ async def crm_export(current_user: Dict[str, Any] = Depends(get_current_user)):
         ])
         count += 1
     return {"csv": buf.getvalue(), "count": count}
+
+
+# ---------- US-022 — Coach veille concurrentielle (Tavily) ----------
+async def _tavily_search(query: str, max_results: int = 5) -> List[Dict[str, Any]]:
+    """Calls Tavily web-search API. Returns a list of {title, url, content, score}."""
+    if not TAVILY_API_KEY:
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            r = await client.post(
+                "https://api.tavily.com/search",
+                json={
+                    "api_key": TAVILY_API_KEY,
+                    "query": query,
+                    "search_depth": "basic",
+                    "include_answer": False,
+                    "max_results": max_results,
+                },
+            )
+        if r.status_code != 200:
+            logger.warning("Tavily error: %s %s", r.status_code, r.text[:200])
+            return []
+        data = r.json()
+        return data.get("results") or []
+    except Exception as e:
+        logger.warning("Tavily exception: %s", e)
+        return []
+
+
+class ResearchIn(BaseModel):
+    query: str
+    language: Literal["fr", "en"] = "fr"
+
+
+@api.post("/coach/research")
+async def coach_research(payload: ResearchIn,
+                         current_user: Dict[str, Any] = Depends(get_current_user)):
+    """Search the web with Tavily, then have Coach synthesise the findings into actionable insights."""
+    results = await _tavily_search(payload.query, max_results=6)
+    sources_block = "\n".join(
+        f"- {r.get('title')} ({r.get('url')}):\n  {(r.get('content') or '')[:400]}"
+        for r in results
+    )
+    lang = payload.language
+    bp = current_user.get("business_profile") or {}
+    if lang == "fr":
+        prompt = f"""Tu fais une veille marché pour le profil suivant : {bp.get('business_name') or '—'} ({bp.get('main_products') or 'vins/spiritueux'}).
+
+Question : "{payload.query}"
+
+Sources web (Tavily) :
+{sources_block or '(aucune source — pas de clé Tavily ou résultat vide)'}
+
+Synthétise en 3 blocs :
+1. **Insights clés** (3 bullets max, factuels)
+2. **Opportunités pour mon business** (2-3 bullets actionnables)
+3. **Sources** (lien + 1 phrase)
+
+Si pas de sources, indique clairement que la veille n'a pas pu être effectuée."""
+    else:
+        prompt = f"""Market intel for the following profile: {bp.get('business_name') or '—'} ({bp.get('main_products') or 'wines/spirits'}).
+
+Question: "{payload.query}"
+
+Web sources (Tavily):
+{sources_block or '(no sources — missing key or empty result)'}
+
+Synthesise in 3 blocks: Key insights, Opportunities for my business, Sources."""
+
+    chat = _make_chat(
+        session_id=f"research_{current_user['user_id']}_{uuid.uuid4().hex[:8]}",
+        system_message=_coach_system(lang),
+    )
+    reply = await chat.send_message(UserMessage(text=prompt))
+    return {
+        "query": payload.query,
+        "sources": [{"title": r.get("title"), "url": r.get("url"), "snippet": (r.get("content") or "")[:200]} for r in results],
+        "synthesis": reply,
+        "tavily_enabled": bool(TAVILY_API_KEY),
+    }
 
 
 app.include_router(api)
