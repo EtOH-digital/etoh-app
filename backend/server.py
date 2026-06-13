@@ -105,7 +105,7 @@ class TokenOut(BaseModel):
 
 class BusinessProfileIn(BaseModel):
     business_name: Optional[str] = None
-    business_type: Optional[Literal["winery", "cooperative", "merchant", "spirits", "other"]] = None
+    business_type: Optional[Literal["winery", "cooperative", "merchant", "spirits", "brewery", "distillery", "wine_shop", "restaurant", "importer", "distributor", "other"]] = None
     region: Optional[str] = None
     main_products: Optional[str] = None
     role: Optional[str] = None
@@ -115,6 +115,21 @@ class BusinessProfileIn(BaseModel):
     goal_campaigns: Optional[int] = Field(default=None, ge=1, le=100)
     goal_distributors: Optional[int] = Field(default=None, ge=1, le=100)
     goal_markets: Optional[int] = Field(default=None, ge=1, le=20)
+    # Onboarding data
+    revenue: Optional[str] = None            # < 100k, 100k-500k, 500k-2M, 2M-10M, +10M
+    objectives: Optional[List[str]] = None   # multi-select objectives
+    products: Optional[List[str]] = None     # vins rouges, bières, etc.
+    avg_bottle_price: Optional[str] = None
+    avg_case_price: Optional[str] = None
+    target_countries: Optional[List[str]] = None
+    target_channels: Optional[List[str]] = None
+    onboarded: Optional[bool] = None
+    # Brand voice (generated after onboarding, editable)
+    brand_voice_tone: Optional[List[str]] = None        # ["professionnel","expert","accessible"]
+    brand_voice_personality: Optional[List[str]] = None # ["passionnée","authentique","pédagogique"]
+    brand_voice_style: Optional[List[str]] = None       # ["phrases courtes","storytelling"]
+    brand_voice_languages: Optional[List[str]] = None   # ["fr","en"]
+    brand_voice_sources: Optional[List[str]] = None     # URLs / domain names trained on
 
 
 class CoachMessageIn(BaseModel):
