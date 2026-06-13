@@ -9,6 +9,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
+  Image,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -68,13 +69,8 @@ export default function Coach() {
   return (
     <SafeAreaView style={s.safe} edges={["top"]}>
       <View style={s.header}>
-        <View style={[s.brandDot, { backgroundColor: Colors.coach }]}>
-          <Text style={s.brandLetter}>C</Text>
-        </View>
-        <View style={{ flex: 1 }}>
-          <Text style={s.headerTitle}>Coach</Text>
-          <Text style={s.headerSub}>Que devez-vous faire ?</Text>
-        </View>
+        <Image source={require("../../assets/brand/coach.png")} style={s.headerLogo} resizeMode="contain" />
+        <View style={{ flex: 1 }} />
         {messages.length > 0 && (
           <TouchableOpacity testID="coach-reset" onPress={reset} style={s.iconBtn}>
             <Ionicons name="add" size={22} color={Colors.text} />
@@ -163,14 +159,11 @@ const s = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bg },
   header: {
     flexDirection: "row", alignItems: "center", gap: Spacing.sm,
-    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.sm,
     borderBottomWidth: 1, borderBottomColor: Colors.border,
     backgroundColor: Colors.bgSecondary,
   },
-  brandDot: { width: 36, height: 36, borderRadius: 10, alignItems: "center", justifyContent: "center" },
-  brandLetter: { color: "#fff", fontWeight: "700", fontSize: 18, fontFamily: "serif" },
-  headerTitle: { fontSize: 18, fontWeight: "700", color: Colors.text, fontFamily: "serif" },
-  headerSub: { fontSize: 12, color: Colors.textMuted },
+  headerLogo: { width: 110, height: 50 },
   iconBtn: { padding: 8, borderRadius: 8, backgroundColor: Colors.bgTertiary },
   scroll: { padding: Spacing.md, gap: Spacing.sm, paddingBottom: Spacing.lg },
   empty: { paddingVertical: Spacing.xl, alignItems: "center" },

@@ -79,8 +79,8 @@ export default function Home() {
         <View style={s.header}>
           <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
             <Image
-              source={require("../../assets/brand/studio.png")}
-              style={{ width: 84, height: 40 }}
+              source={require("../../assets/brand/etoh.png")}
+              style={{ width: 70, height: 50 }}
               resizeMode="contain"
             />
             <View style={s.credits} testID="home-credits">
@@ -92,8 +92,8 @@ export default function Home() {
             {greeting}
             {firstName ? `, ${firstName}` : ""}
           </Text>
-          <Text style={s.headline}>Votre Directeur Commercial IA</Text>
-          <Text style={s.sub}>Vins & Spiritueux</Text>
+          <Text style={s.headline}>Apprendre. S'équiper. Exécuter.</Text>
+          <Text style={s.sub}>Vendez plus de vin, bière & spiritueux.</Text>
         </View>
 
         <View style={s.modulesRow}>

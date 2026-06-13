@@ -10,6 +10,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Share,
+  Image,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
@@ -93,13 +94,8 @@ export default function Studio() {
   return (
     <SafeAreaView style={s.safe} edges={["top"]}>
       <View style={s.header}>
-        <View style={[s.brandDot, { backgroundColor: Colors.studio }]}>
-          <Text style={s.brandLetter}>S</Text>
-        </View>
-        <View style={{ flex: 1 }}>
-          <Text style={s.headerTitle}>Studio</Text>
-          <Text style={s.headerSub}>Comment le dire ?</Text>
-        </View>
+        <Image source={require("../../assets/brand/studio.png")} style={s.headerLogo} resizeMode="contain" />
+        <View style={{ flex: 1 }} />
       </View>
 
       <KeyboardAvoidingView
@@ -208,14 +204,11 @@ const s = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bg },
   header: {
     flexDirection: "row", alignItems: "center", gap: Spacing.sm,
-    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.sm,
     borderBottomWidth: 1, borderBottomColor: Colors.border,
     backgroundColor: Colors.bgSecondary,
   },
-  brandDot: { width: 36, height: 36, borderRadius: 10, alignItems: "center", justifyContent: "center" },
-  brandLetter: { color: "#fff", fontWeight: "700", fontSize: 18, fontFamily: "serif" },
-  headerTitle: { fontSize: 18, fontWeight: "700", color: Colors.text, fontFamily: "serif" },
-  headerSub: { fontSize: 12, color: Colors.textMuted },
+  headerLogo: { width: 110, height: 50 },
   label: { fontSize: 12, color: Colors.textSecondary, textTransform: "uppercase", letterSpacing: 1, marginBottom: Spacing.sm, fontWeight: "600" },
   chip: {
     flexDirection: "row", alignItems: "center", gap: 6,

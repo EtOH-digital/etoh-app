@@ -15,6 +15,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { Colors, Spacing, Radii, Fonts } from "@/src/theme";
 import { useAuth } from "@/src/auth/AuthContext";
+import { HexDots } from "@/src/components/HexDots";
 
 export default function Login() {
   const { login, signup, googleLogin } = useAuth();
@@ -70,11 +71,15 @@ export default function Login() {
         >
           <View style={s.brand}>
             <Image
-              source={require("../../assets/brand/studio.png")}
+              source={require("../../assets/brand/etoh.png")}
               style={s.logoImg}
               resizeMode="contain"
             />
-            <Text style={s.tagline}>Votre Directeur Commercial IA{"\n"}vins & spiritueux</Text>
+            <HexDots size={10} gap={12} />
+            <Text style={s.tagline}>
+              Apprendre. S'équiper. Exécuter.{"\n"}
+              Vendez plus de vin, bière & spiritueux.
+            </Text>
           </View>
 
           <View style={s.card}>
@@ -183,8 +188,8 @@ const s = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bg },
   scroll: { flexGrow: 1, justifyContent: "center", padding: Spacing.lg, maxWidth: 480, width: "100%", alignSelf: "center" },
   brand: { alignItems: "center", marginBottom: Spacing.xl },
-  logoImg: { width: 200, height: 110, marginBottom: Spacing.sm },
-  tagline: { fontFamily: Fonts.body, fontSize: 14, color: Colors.textSecondary, textAlign: "center", marginTop: Spacing.sm, lineHeight: 20 },
+  logoImg: { width: 200, height: 140 },
+  tagline: { fontFamily: Fonts.body, fontSize: 13, color: Colors.textSecondary, textAlign: "center", marginTop: Spacing.sm, lineHeight: 19 },
   card: {
     backgroundColor: Colors.bgSecondary,
     borderRadius: Radii.xl,

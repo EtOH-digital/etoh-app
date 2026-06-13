@@ -550,7 +550,7 @@ const s = StyleSheet.create({
     borderBottomWidth: 1, borderBottomColor: Colors.border,
     backgroundColor: Colors.bgSecondary,
   },
-  headerLogo: { width: 90, height: 36 },
+  headerLogo: { width: 110, height: 50 },
   creditBadge: {
     flexDirection: "row", alignItems: "center", gap: 4,
     paddingHorizontal: 10, paddingVertical: 6,

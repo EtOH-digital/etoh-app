@@ -1,33 +1,46 @@
 /**
  * EtOH design tokens — single source of truth for colors, spacing, typography.
+ * Aligned with etoh.io brand identity (master EtOH logo + 6 hex accents).
  */
 export const Colors = {
-  bg: "#FAFAF9",
+  // Surfaces (warm off-white, very subtle)
+  bg: "#FAFAF7",
   bgSecondary: "#FFFFFF",
-  bgTertiary: "#F5F5F4",
+  bgTertiary: "#F2F1ED",
   text: "#1C1917",
-  textSecondary: "#57534E",
-  textMuted: "#A8A29E",
+  textSecondary: "#4F4B47",
+  textMuted: "#9A938C",
   textInverse: "#FFFFFF",
-  border: "#E7E5E4",
-  divider: "#D6D3D1",
+  border: "#E7E4DE",
+  divider: "#D6D2CB",
   success: "#15803d",
   warning: "#b45309",
   error: "#b91c1c",
 
-  // Brand (matches the EtOH logo variants provided by the user)
-  brandPrimary: "#1f3a5f", // EtOH navy used in default logo and Studio
-  coach: "#c7263e",        // Coach — red
-  coachDark: "#a61c31",
-  studio: "#1f3a5f",       // Studio — dark navy
-  studioDark: "#152a45",
-  pilot: "#4ba3b7",        // Pilot — teal
+  // EtOH master brand
+  brandPrimary: "#1f2937",   // near-black used in the wordmark
+  brandPrimarySoft: "#F2F1ED",
+
+  // Module colors — sampled from the official logos
+  coach: "#c7263e",          // EtOH Coach — red
+  coachDark: "#9c1c30",
+  studio: "#1f3a5f",         // EtOH Studio — navy
+  studioDark: "#11243f",
+  pilot: "#4ba3b7",          // EtOH Pilot — teal
   pilotDark: "#3d8697",
 
-  // Soft surfaces (tinted backgrounds for module cards)
-  coachSoft: "#FCEFF1",
-  studioSoft: "#EAF0F7",
-  pilotSoft: "#E8F4F7",
+  // Soft tinted surfaces
+  coachSoft: "#FBEBED",
+  studioSoft: "#E9EFF6",
+  pilotSoft: "#E5F2F5",
+
+  // Hexagon accent palette (from EtOH master logo, left → right)
+  hex1: "#c8163e",   // red
+  hex2: "#f7a01e",   // orange
+  hex3: "#4ba3b7",   // teal
+  hex4: "#d0d534",   // yellow-green
+  hex5: "#c41867",   // magenta
+  hex6: "#1f3a5f",   // navy
 };
 
 export const Spacing = {
@@ -50,7 +63,7 @@ export const Radii = {
 /**
  * Font tokens. Family names match the keys passed to `useFonts(...)` in
  * the root layout. Use `Fonts.headingBold` for any heading/title and
- * `Fonts.body` / `Fonts.bodyBold` for the rest of the UI.
+ * `Fonts.body` / `Fonts.bodyMedium` for the rest of the UI.
  */
 export const Fonts = {
   heading: "ExpletusSans_400Regular",
@@ -63,8 +76,8 @@ export const Fonts = {
 export const Shadow = {
   card: {
     shadowColor: "#000",
-    shadowOpacity: 0.05,
-    shadowRadius: 12,
+    shadowOpacity: 0.04,
+    shadowRadius: 14,
     shadowOffset: { width: 0, height: 4 },
     elevation: 2,
   },
