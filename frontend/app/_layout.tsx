@@ -18,10 +18,19 @@ function RootNav() {
 
   useEffect(() => {
     if (loading) return;
-    const inAuthGroup = (segments[0] as string) === "(auth)";
-    if (!user && !inAuthGroup) {
-      router.replace("/(auth)/login");
-    } else if (user && inAuthGroup) {
+    const top = segments[0] as string | undefined;
+    const inAuth = top === "(auth)";
+    const inOnboarding = top === "(onboarding)";
+
+    if (!user) {
+      if (!inAuth) router.replace("/(auth)/login");
+      return;
+    }
+    // Logged in
+    const onboarded = (user.business_profile as any)?.onboarded === true;
+    if (!onboarded && !inOnboarding) {
+      router.replace("/(onboarding)");
+    } else if (onboarded && (inAuth || inOnboarding)) {
       router.replace("/(tabs)");
     }
   }, [user, loading, segments, router]);
@@ -29,6 +38,7 @@ function RootNav() {
   return (
     <Stack screenOptions={{ headerShown: false, animation: "fade" }}>
       <Stack.Screen name="(auth)" />
+      <Stack.Screen name="(onboarding)" />
       <Stack.Screen name="(tabs)" />
     </Stack>
   );

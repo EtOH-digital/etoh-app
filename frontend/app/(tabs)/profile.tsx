@@ -205,6 +205,71 @@ export default function Profile() {
             )}
           </TouchableOpacity>
 
+          {/* Wallet */}
+          <Text style={[s.sectionTitle, { marginTop: 36 }]}>Wallet</Text>
+          <View style={s.walletCard} testID="wallet-card">
+            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+              <View>
+                <Text style={s.walletLabel}>Solde actuel</Text>
+                <Text style={s.walletAmount}>{user?.credits ?? 0} <Text style={s.walletUnit}>crédits</Text></Text>
+                <Text style={s.walletHint}>≈ {(((user?.credits ?? 0) * 0.099)).toFixed(2)} €</Text>
+              </View>
+              <Ionicons name="flash" size={36} color={Colors.brandPrimary} />
+            </View>
+          </View>
+
+          <Text style={[s.label, { marginTop: Spacing.md }]}>Recharger</Text>
+          <View style={{ gap: 8 }}>
+            <PackRow testID="wallet-pack-99" credits={100} priceEur={9.9} subtitle="Découverte" />
+            <PackRow testID="wallet-pack-495" credits={500} priceEur={49.5} subtitle="Régulier" badge="-0%" />
+            <PackRow testID="wallet-pack-198" credits={2000} priceEur={178.2} subtitle="Pro" badge="-10%" />
+          </View>
+          <Text style={s.smallNote}>Paiement Stripe (CB + SEPA) — disponible prochainement.</Text>
+
+          {/* Action costs */}
+          <Text style={[s.sectionTitle, { marginTop: 36 }]}>Coût des actions</Text>
+          <View style={s.costsCard}>
+            {[
+              { label: "Analyse Coach", cost: 1 },
+              { label: "Recherche prospects (Pilot)", cost: 3 },
+              { label: "Génération email / post", cost: 1 },
+              { label: "Campagne complète", cost: 10 },
+              { label: "Livre blanc", cost: 25 },
+            ].map((it, i) => (
+              <View key={i} style={[s.costRow, i > 0 && { borderTopWidth: 1, borderTopColor: Colors.border }]}>
+                <Text style={s.costLabel}>{it.label}</Text>
+                <View style={s.costChip}>
+                  <Ionicons name="flash" size={11} color={Colors.brandPrimary} />
+                  <Text style={s.costChipText}>{it.cost}</Text>
+                </View>
+              </View>
+            ))}
+          </View>
+
+          {/* Brand Voice */}
+          <Text style={[s.sectionTitle, { marginTop: 36 }]}>Brand Voice</Text>
+          <Text style={s.sectionSub}>L'IA utilise ces traits pour rédiger comme vous.</Text>
+          {(() => {
+            const bv = (user?.business_profile as any) || {};
+            const tone = bv.brand_voice_tone || ["professionnel", "expert", "accessible"];
+            const personality = bv.brand_voice_personality || ["passionnée", "authentique", "pédagogique"];
+            const style = bv.brand_voice_style || ["phrases courtes", "pas de jargon", "storytelling"];
+            const langs = bv.brand_voice_languages || ["fr", "en"];
+            return (
+              <View style={{ gap: 10 }} testID="brand-voice">
+                <BVRow icon="megaphone-outline" color={Colors.coach} title="Ton" items={tone} />
+                <BVRow icon="heart-outline" color={Colors.studio} title="Personnalité" items={personality} />
+                <BVRow icon="create-outline" color={Colors.pilot} title="Style" items={style} />
+                <BVRow icon="globe-outline" color={Colors.hex2} title="Langues" items={langs.map((l: string) => l === "fr" ? "Français" : l === "en" ? "English" : l)} />
+              </View>
+            );
+          })()}
+          <TouchableOpacity testID="brand-voice-train" style={s.trainBtn} activeOpacity={0.85}>
+            <Ionicons name="sparkles-outline" size={14} color="#fff" />
+            <Text style={s.trainBtnText}>Entraîner ma Brand Voice</Text>
+          </TouchableOpacity>
+          <Text style={s.smallNote}>Bientôt : entraînez sur votre site, plaquette PDF, LinkedIn ou Instagram.</Text>
+
           <TouchableOpacity testID="profile-logout" style={s.logoutBtn} onPress={logout}>
             <Ionicons name="log-out-outline" size={18} color={Colors.error} />
             <Text style={s.logoutText}>Se déconnecter</Text>
@@ -212,6 +277,42 @@ export default function Profile() {
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
+  );
+}
+
+function PackRow({ testID, credits, priceEur, subtitle, badge }: { testID: string; credits: number; priceEur: number; subtitle: string; badge?: string }) {
+  return (
+    <TouchableOpacity testID={testID} style={s.packRow} activeOpacity={0.85}>
+      <View style={{ flex: 1 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+          <Text style={s.packCredits}>{credits} crédits</Text>
+          {badge && <View style={s.packBadge}><Text style={s.packBadgeText}>{badge}</Text></View>}
+        </View>
+        <Text style={s.packSub}>{subtitle}</Text>
+      </View>
+      <Text style={s.packPrice}>{priceEur.toFixed(2)} €</Text>
+      <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />
+    </TouchableOpacity>
+  );
+}
+
+function BVRow({ icon, color, title, items }: { icon: any; color: string; title: string; items: string[] }) {
+  return (
+    <View style={s.bvRow}>
+      <View style={[s.bvIcon, { backgroundColor: color + "22" }]}>
+        <Ionicons name={icon} size={16} color={color} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={s.bvTitle}>{title}</Text>
+        <View style={s.bvChips}>
+          {items.map((t, i) => (
+            <View key={i} style={s.bvChip}>
+              <Text style={s.bvChipText}>{t}</Text>
+            </View>
+          ))}
+        </View>
+      </View>
+    </View>
   );
 }
 
@@ -225,7 +326,33 @@ const s = StyleSheet.create({
   avatarText: { color: "#fff", fontSize: 28, fontWeight: "700", fontFamily: "serif" },
   name: { fontSize: 18, fontWeight: "600", color: Colors.text, fontFamily: "serif" },
   email: { fontSize: 13, color: Colors.textMuted, marginTop: 2 },
-  sectionTitle: { fontSize: 16, fontWeight: "600", color: Colors.text, fontFamily: "serif", marginBottom: Spacing.md },
+  sectionTitle: { fontSize: 16, fontWeight: "600", color: Colors.text, fontFamily: Fonts.headingBold, marginBottom: Spacing.md },
+  sectionSub: { fontFamily: Fonts.body, fontSize: 12, color: Colors.textMuted, marginTop: -8, marginBottom: 12 },
+  walletCard: { backgroundColor: Colors.brandPrimarySoft, borderRadius: Radii.lg, padding: Spacing.md, borderWidth: 1, borderColor: Colors.border },
+  walletLabel: { fontFamily: Fonts.bodyMedium, fontSize: 11, color: Colors.textSecondary, textTransform: "uppercase", letterSpacing: 1, fontWeight: "700" },
+  walletAmount: { fontFamily: Fonts.headingBold, fontSize: 32, color: Colors.text, marginTop: 4 },
+  walletUnit: { fontFamily: Fonts.body, fontSize: 14, color: Colors.textMuted },
+  walletHint: { fontFamily: Fonts.body, fontSize: 12, color: Colors.textSecondary, marginTop: 2 },
+  packRow: { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 14, paddingVertical: 14, borderRadius: Radii.md, borderWidth: 1, borderColor: Colors.border, backgroundColor: Colors.bgSecondary },
+  packCredits: { fontFamily: Fonts.bodyMedium, fontSize: 14, color: Colors.text, fontWeight: "700" },
+  packSub: { fontFamily: Fonts.body, fontSize: 11, color: Colors.textMuted, marginTop: 2 },
+  packBadge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, backgroundColor: Colors.success + "22" },
+  packBadgeText: { fontFamily: Fonts.bodyMedium, fontSize: 10, color: Colors.success, fontWeight: "700" },
+  packPrice: { fontFamily: Fonts.headingBold, fontSize: 15, color: Colors.text },
+  smallNote: { fontFamily: Fonts.body, fontSize: 11, color: Colors.textMuted, marginTop: 8, fontStyle: "italic" },
+  costsCard: { borderWidth: 1, borderColor: Colors.border, borderRadius: Radii.md, backgroundColor: Colors.bgSecondary },
+  costRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 14, paddingVertical: 12 },
+  costLabel: { fontFamily: Fonts.body, fontSize: 13, color: Colors.text },
+  costChip: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 3, backgroundColor: Colors.brandPrimarySoft, borderRadius: Radii.pill },
+  costChipText: { fontFamily: Fonts.bodyMedium, fontSize: 11, color: Colors.brandPrimary, fontWeight: "700" },
+  bvRow: { flexDirection: "row", gap: 10, padding: 12, borderWidth: 1, borderColor: Colors.border, borderRadius: Radii.md, backgroundColor: Colors.bgSecondary },
+  bvIcon: { width: 32, height: 32, borderRadius: 8, alignItems: "center", justifyContent: "center" },
+  bvTitle: { fontFamily: Fonts.bodyMedium, fontSize: 12, color: Colors.textSecondary, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: "700" },
+  bvChips: { flexDirection: "row", flexWrap: "wrap", gap: 4, marginTop: 6 },
+  bvChip: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: Radii.pill, backgroundColor: Colors.bgTertiary },
+  bvChipText: { fontFamily: Fonts.body, fontSize: 11, color: Colors.text },
+  trainBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, backgroundColor: Colors.brandPrimary, borderRadius: Radii.md, paddingVertical: 12, marginTop: 12 },
+  trainBtnText: { color: "#fff", fontFamily: Fonts.bodyMedium, fontWeight: "700", fontSize: 13 },
   label: { fontSize: 12, color: Colors.textSecondary, textTransform: "uppercase", letterSpacing: 1, marginBottom: Spacing.xs, marginTop: Spacing.md, fontWeight: "600" },
   input: {
     borderWidth: 1, borderColor: Colors.border, borderRadius: Radii.md,
