@@ -60,6 +60,22 @@ RESEND_FROM_NAME = os.environ.get("RESEND_FROM_NAME", "EtOH Pilot")
 # --- Tavily (web search for Coach veille concurrentielle) ---
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY", "")
 
+# --- Stripe (wallet credit packs) ---
+STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
+STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+
+import stripe  # noqa: E402
+if STRIPE_SECRET_KEY:
+    stripe.api_key = STRIPE_SECRET_KEY
+
+# Credit packs — (id, credits, price_eur, label)
+CREDIT_PACKS = [
+    {"id": "starter", "credits": 100, "price_eur": 9.90, "label": "Découverte"},
+    {"id": "growth",  "credits": 500, "price_eur": 49.50, "label": "Régulier"},
+    {"id": "pro",     "credits": 2000, "price_eur": 178.20, "label": "Pro · -10%"},
+]
+PACK_BY_ID = {p["id"]: p for p in CREDIT_PACKS}
+
 EMERGENT_SESSION_API = "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -1643,6 +1659,146 @@ Synthesise in 3 blocks: Key insights, Opportunities for my business, Sources."""
         "synthesis": reply,
         "tavily_enabled": bool(TAVILY_API_KEY),
     }
+
+
+# ---------- US-050/051/052 — Stripe Wallet ----------
+class CheckoutIn(BaseModel):
+    pack_id: Literal["starter", "growth", "pro"]
+    success_url: str
+    cancel_url: str
+
+
+@api.get("/wallet/packs")
+async def wallet_packs(_: Dict[str, Any] = Depends(get_current_user)):
+    return {"packs": CREDIT_PACKS, "currency": "eur", "credit_unit_eur": CREDIT_PRICE_EUR}
+
+
+@api.post("/wallet/checkout")
+async def wallet_checkout(payload: CheckoutIn,
+                          current_user: Dict[str, Any] = Depends(get_current_user)):
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(status_code=503, detail="Stripe not configured (missing STRIPE_SECRET_KEY).")
+    pack = PACK_BY_ID.get(payload.pack_id)
+    if not pack:
+        raise HTTPException(status_code=400, detail="Unknown pack id")
+    try:
+        session = stripe.checkout.Session.create(
+            mode="payment",
+            payment_method_types=["card", "sepa_debit"],
+            customer_email=current_user["email"],
+            line_items=[{
+                "price_data": {
+                    "currency": "eur",
+                    "unit_amount": int(round(pack["price_eur"] * 100)),
+                    "product_data": {
+                        "name": f"EtOH — {pack['credits']} crédits ({pack['label']})",
+                        "description": f"Pack {pack['label']} · {pack['credits']} crédits @ {CREDIT_PRICE_EUR:.3f} €/crédit",
+                    },
+                },
+                "quantity": 1,
+            }],
+            success_url=payload.success_url + "?session_id={CHECKOUT_SESSION_ID}",
+            cancel_url=payload.cancel_url,
+            metadata={
+                "user_id": current_user["user_id"],
+                "pack_id": pack["id"],
+                "credits": str(pack["credits"]),
+            },
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Stripe error: {e}")
+
+    # Persist intent for later reconciliation
+    await db.wallet_checkouts.insert_one({
+        "session_id": session.id,
+        "user_id": current_user["user_id"],
+        "pack_id": pack["id"],
+        "credits": pack["credits"],
+        "amount_eur": pack["price_eur"],
+        "status": "pending",
+        "created_at": _now(),
+    })
+    return {"checkout_url": session.url, "session_id": session.id}
+
+
+@api.get("/wallet/checkout/{session_id}")
+async def wallet_checkout_status(session_id: str,
+                                 current_user: Dict[str, Any] = Depends(get_current_user)):
+    """Poll endpoint for the success page to confirm payment + credit the wallet."""
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(status_code=503, detail="Stripe not configured")
+    record = await db.wallet_checkouts.find_one(
+        {"session_id": session_id, "user_id": current_user["user_id"]}, {"_id": 0}
+    )
+    if not record:
+        raise HTTPException(status_code=404, detail="Checkout not found")
+    if record["status"] == "paid":
+        return {"status": "paid", "credits_added": record["credits"]}
+    try:
+        session = stripe.checkout.Session.retrieve(session_id)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Stripe error: {e}")
+    if session.payment_status == "paid":
+        # Idempotent credit add
+        result = await db.wallet_checkouts.update_one(
+            {"session_id": session_id, "status": "pending"},
+            {"$set": {"status": "paid", "paid_at": _now()}},
+        )
+        if result.modified_count > 0:
+            await db.users.update_one(
+                {"user_id": current_user["user_id"]},
+                {"$inc": {"credits": record["credits"]}},
+            )
+        return {"status": "paid", "credits_added": record["credits"]}
+    return {"status": session.payment_status or "pending"}
+
+
+@api.get("/wallet/usage")
+async def wallet_usage(current_user: Dict[str, Any] = Depends(get_current_user)):
+    """US-051 — usage breakdown by action over the last 30 days."""
+    now = _now()
+    since = now - timedelta(days=30)
+    pipeline = [
+        {"$match": {"user_id": current_user["user_id"], "created_at": {"$gte": since}}},
+        {"$group": {"_id": "$action", "credits": {"$sum": "$cost"}, "count": {"$sum": 1}}},
+    ]
+    by_action: Dict[str, Dict[str, int]] = {}
+    total = 0
+    async for d in db.action_log.aggregate(pipeline):
+        by_action[d["_id"]] = {"credits": d["credits"], "count": d["count"]}
+        total += d["credits"]
+    return {
+        "period_days": 30,
+        "total_credits_spent": total,
+        "total_eur_spent": round(total * CREDIT_PRICE_EUR, 2),
+        "by_action": by_action,
+        "current_balance": int(current_user.get("credits", 0)),
+    }
+
+
+class AutoRechargeIn(BaseModel):
+    enabled: bool
+    threshold: Optional[int] = 20      # credits below which auto-recharge kicks in
+    pack_id: Optional[Literal["starter", "growth", "pro"]] = "starter"
+
+
+@api.put("/wallet/auto-recharge")
+async def wallet_auto_recharge(payload: AutoRechargeIn,
+                               current_user: Dict[str, Any] = Depends(get_current_user)):
+    """US-052 — toggle auto-recharge preference (actual charging requires saved
+    Stripe Customer + payment method; this endpoint stores the preference)."""
+    update = {
+        "auto_recharge.enabled": bool(payload.enabled),
+        "auto_recharge.threshold": int(payload.threshold or 20),
+        "auto_recharge.pack_id": payload.pack_id or "starter",
+        "auto_recharge.updated_at": _now(),
+    }
+    await db.users.update_one({"user_id": current_user["user_id"]}, {"$set": update})
+    return {"ok": True, "preference": {
+        "enabled": payload.enabled,
+        "threshold": payload.threshold,
+        "pack_id": payload.pack_id,
+    }}
 
 
 app.include_router(api)

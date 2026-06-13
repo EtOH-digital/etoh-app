@@ -58,6 +58,51 @@ export default function Profile() {
     loadCrm();
   };
 
+  const buyPack = async (packId: "starter" | "growth" | "pro") => {
+    try {
+      const successUrl = typeof window !== "undefined"
+        ? `${window.location.origin}/`
+        : "https://ai-coach-autopilot.preview.emergentagent.com/";
+      const cancelUrl = successUrl;
+      const r = await apiFetch<{ checkout_url: string; session_id: string }>(
+        "/wallet/checkout",
+        {
+          method: "POST",
+          body: JSON.stringify({ pack_id: packId, success_url: successUrl, cancel_url: cancelUrl }),
+        }
+      );
+      if (Platform.OS === "web" && typeof window !== "undefined") {
+        // Persist session id so we can confirm payment when user returns
+        try { localStorage.setItem("etoh.pending_checkout", r.session_id); } catch {}
+        window.location.href = r.checkout_url;
+      } else {
+        await Linking.openURL(r.checkout_url);
+      }
+    } catch (e: any) {
+      alert?.(`Erreur paiement : ${e?.message || e}`);
+    }
+  };
+
+  // Confirm payment when user returns from Stripe (web only)
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof window === "undefined") return;
+    const sid = new URLSearchParams(window.location.search).get("session_id");
+    if (!sid) return;
+    (async () => {
+      try {
+        const r = await apiFetch<{ status: string; credits_added?: number }>(
+          `/wallet/checkout/${sid}`
+        );
+        if (r.status === "paid") {
+          await refresh();
+          try { localStorage.removeItem("etoh.pending_checkout"); } catch {}
+          // Strip the query param so refreshes don't retrigger
+          window.history.replaceState(null, "", window.location.pathname);
+        }
+      } catch {}
+    })();
+  }, []);
+
   const exportCsv = async () => {
     const r = await apiFetch<{ csv: string }>("/crm/export");
     if (Platform.OS === "web" && typeof window !== "undefined") {
@@ -403,9 +448,9 @@ export default function Profile() {
   );
 }
 
-function PackRow({ testID, credits, priceEur, subtitle, badge }: { testID: string; credits: number; priceEur: number; subtitle: string; badge?: string }) {
+function PackRow({ testID, credits, priceEur, subtitle, badge, onPress }: { testID: string; credits: number; priceEur: number; subtitle: string; badge?: string; onPress?: () => void }) {
   return (
-    <TouchableOpacity testID={testID} style={s.packRow} activeOpacity={0.85}>
+    <TouchableOpacity testID={testID} style={s.packRow} activeOpacity={0.85} onPress={onPress}>
       <View style={{ flex: 1 }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
           <Text style={s.packCredits}>{credits} crédits</Text>
