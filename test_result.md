@@ -101,3 +101,20 @@
 #====================================================================================================
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
+
+frontend:
+  - task: "Unified Chat UX + Boost prompt pre-fill (Coach/Studio/Pilot)"
+    implemented: true
+    working: true
+    file: "frontend/app/(tabs)/coach.tsx, studio.tsx, pilot.tsx, index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "Verified visually via screenshots. Dashboard 'Boost' on a recommendation routes to the correct module and pre-fills the input. Coach chat input pre-filled. Pilot search bar pre-filled. Studio brief pre-filled (template + tone selectors retained). Fixed missing `Fonts` import in studio.tsx that was breaking the screen."
+
+agent_communication:
+  - agent: "main"
+    message: "Verified the unified UX & Boost prompt pre-filling across the three modules. Found and fixed a runtime error in studio.tsx (missing Fonts import). All three module screens now load and pre-fill from ?prompt= correctly."

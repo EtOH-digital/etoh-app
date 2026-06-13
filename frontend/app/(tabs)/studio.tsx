@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -12,11 +12,12 @@ import {
   Share,
   Image,
 } from "react-native";
+import { useLocalSearchParams } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
 import { Ionicons } from "@expo/vector-icons";
 
-import { Colors, Spacing, Radii } from "@/src/theme";
+import { Colors, Spacing, Radii, Fonts } from "@/src/theme";
 import { apiFetch } from "@/src/api/client";
 import { useAuth } from "@/src/auth/AuthContext";
 
@@ -45,12 +46,17 @@ const TONES = [
 
 export default function Studio() {
   const { user } = useAuth();
+  const params = useLocalSearchParams<{ prompt?: string }>();
   const [selected, setSelected] = useState<Template>(TEMPLATES[0]);
   const [brief, setBrief] = useState("");
   const [tone, setTone] = useState("professional");
   const [output, setOutput] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    if (params.prompt && !brief) setBrief(params.prompt as string);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params.prompt]);
 
   const generate = async () => {
     if (!brief.trim()) {
@@ -109,6 +115,12 @@ export default function Studio() {
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
+          <Text style={{ fontFamily: Fonts.headingBold, fontSize: 22, color: Colors.text, marginBottom: 6 }}>
+            Quel contenu voulez-vous générer&nbsp;?
+          </Text>
+          <Text style={{ fontFamily: Fonts.body, fontSize: 13, color: Colors.textSecondary, marginBottom: Spacing.lg }}>
+            Choisissez un format, décrivez votre besoin, Studio s'occupe du reste.
+          </Text>
           <Text style={s.label}>Quel type de contenu ?</Text>
           <ScrollView
             horizontal

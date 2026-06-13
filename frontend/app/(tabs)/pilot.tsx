@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -13,6 +13,7 @@ import {
   Linking,
   Image,
 } from "react-native";
+import { useLocalSearchParams } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Clipboard from "expo-clipboard";
@@ -56,10 +57,15 @@ const SUGGESTIONS = [
 
 export default function PilotScreen() {
   const { user, refresh } = useAuth();
+  const params = useLocalSearchParams<{ prompt?: string }>();
   const [query, setQuery] = useState("");
   const [result, setResult] = useState<SearchResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    if (params.prompt && !query) setQuery(params.prompt as string);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params.prompt]);
 
   // Action modal state
   const [activeTarget, setActiveTarget] = useState<Target | null>(null);
@@ -256,9 +262,9 @@ export default function PilotScreen() {
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          <Text style={s.titleBig}>Trouvez vos prochains clients</Text>
+          <Text style={s.titleBig}>Quelles actions de prospection&nbsp;?</Text>
           <Text style={s.subtitle}>
-            Décrivez votre cible en langage naturel. L'IA propose des contacts à contacter en 1 clic.
+            Décrivez vos cibles en langage naturel. L'IA propose des contacts à contacter en 1 clic.
           </Text>
 
           <View style={s.searchRow}>

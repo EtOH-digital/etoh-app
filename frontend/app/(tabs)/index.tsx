@@ -171,7 +171,7 @@ export default function Home() {
                     testID={`home-rec-${i}`}
                     style={[s.recCard, { borderLeftColor: meta.color }]}
                     activeOpacity={0.85}
-                    onPress={() => router.push(meta.route as any)}
+                    onPress={() => router.push(`${meta.route}?prompt=${encodeURIComponent(r.title + " — " + r.description)}` as any)}
                   >
                     <View style={s.recHead}>
                       <Text style={s.recMedal}>{meta.medal}</Text>
@@ -181,6 +181,12 @@ export default function Home() {
                     </View>
                     <Text style={s.recTitle}>{r.title}</Text>
                     <Text style={s.recDesc}>{r.description}</Text>
+                    <View style={{ flexDirection: "row", justifyContent: "flex-end", marginTop: 8 }}>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999, backgroundColor: meta.color + "22" }}>
+                        <Ionicons name="flash" size={11} color={meta.color} />
+                        <Text style={{ fontFamily: Fonts.bodyMedium, fontSize: 11, color: meta.color, fontWeight: "700" }}>Boost →</Text>
+                      </View>
+                    </View>
                   </TouchableOpacity>
                 );
               })}

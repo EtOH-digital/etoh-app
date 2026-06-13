@@ -11,6 +11,7 @@ import {
   ActivityIndicator,
   Image,
 } from "react-native";
+import { useLocalSearchParams } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 
@@ -29,11 +30,21 @@ const SUGGESTIONS = [
 
 export default function Coach() {
   const { user } = useAuth();
+  const params = useLocalSearchParams<{ prompt?: string }>();
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [sessionId, setSessionId] = useState<string | undefined>();
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef<ScrollView | null>(null);
+  const handledPromptRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const p = (params.prompt as string) || "";
+    if (p && p !== handledPromptRef.current) {
+      handledPromptRef.current = p;
+      setInput(p);
+    }
+  }, [params.prompt]);
 
   useEffect(() => {
     scrollRef.current?.scrollToEnd({ animated: true });
@@ -104,9 +115,9 @@ export default function Coach() {
         >
           {messages.length === 0 && (
             <View style={s.empty}>
-              <Text style={s.emptyTitle}>Posez votre question business</Text>
+              <Text style={s.emptyTitle}>Que voulez-vous savoir&nbsp;?</Text>
               <Text style={s.emptySub}>
-                Diagnostic, recommandations et plan d'action en quelques secondes.
+                Demandez à votre Coach IA n'importe quelle question commerciale.
               </Text>
               <View style={s.suggestions}>
                 {SUGGESTIONS.map((q, i) => (
