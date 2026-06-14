@@ -26,6 +26,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Header, status
 from fastapi.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo.errors import DuplicateKeyError
 from pydantic import BaseModel, EmailStr, Field
 
 from emergentintegrations.llm.chat import LlmChat, UserMessage
@@ -454,8 +455,9 @@ async def stripe_webhook(request: Request):
                 "type": event.get("type"),
                 "received_at": _now(),
             })
-        except Exception:
-            # Duplicate key → already processed, short-circuit.
+        except DuplicateKeyError:
+            # Already processed → short-circuit. Any *other* DB error must surface
+            # (so Sentry catches real outages instead of pretending they were replays).
             return {"received": True, "duplicate": True}
 
     etype = event.get("type") if isinstance(event, dict) else event["type"]
@@ -520,9 +522,17 @@ async def stripe_webhook(request: Request):
 
 @app.get("/api/debug/sentry")
 async def debug_sentry():
-    """Test endpoint — raises an exception to verify Sentry capture. Remove in prod."""
+    """Test endpoint — raises an exception to verify Sentry capture.
+
+    Disabled in production: only available when SENTRY_ENVIRONMENT != 'production'
+    OR when DEBUG_ENDPOINTS=1 is explicitly set.
+    """
     if not SENTRY_ENABLED:
         return {"sentry": "disabled"}
+    env = os.environ.get("SENTRY_ENVIRONMENT", "development").lower()
+    debug_on = os.environ.get("DEBUG_ENDPOINTS", "").lower() in ("1", "true", "yes")
+    if env == "production" and not debug_on:
+        raise HTTPException(status_code=404, detail="not found")
     raise RuntimeError("Sentry test exception — if you see this in Sentry, monitoring works ✅")
 
 
