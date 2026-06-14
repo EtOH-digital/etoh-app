@@ -181,25 +181,41 @@ async def search_chunks(
     if not use_mmr or len(candidates) <= top_k:
         selected = candidates[:top_k]
     else:
-        # MMR: greedy reranking from a 4×top_k pool (capped at 60)
+        # MMR: greedy reranking from a 4×top_k pool (capped at 60), with a
+        # PER-DOC CAP to guarantee cross-document diversity. Without the cap,
+        # a single long doc with high query similarity could dominate every slot
+        # (observed during testing on a 'vin bio' query against a long Wikipedia
+        # article + a short specific doc).
         pool = candidates[: max(top_k * 4, 20)][:60]
+        per_doc_cap = max(1, min(top_k - 1, 2))  # at most 2 chunks per doc when top_k>=3
+        per_doc_count: Dict[str, int] = {}
         selected: List[Tuple[float, Dict[str, Any], List[float]]] = []
         remaining = list(pool)
+
+        def _take(idx: int) -> None:
+            score, doc, emb = remaining.pop(idx)
+            per_doc_count[doc.get("doc_id") or ""] = per_doc_count.get(doc.get("doc_id") or "", 0) + 1
+            selected.append((score, doc, emb))
+
         # First: always pick top-1 by similarity
-        selected.append(remaining.pop(0))
+        _take(0)
         while len(selected) < top_k and remaining:
             best_idx = -1
             best_score = -1e9
-            for i, (sim, _doc, emb) in enumerate(remaining):
-                # Diversity = max cosine sim to any already-selected chunk
+            for i, (sim, doc, emb) in enumerate(remaining):
+                # Hard cap per doc — once cap reached, deprioritise but keep as fallback
+                doc_id = doc.get("doc_id") or ""
+                hit_cap = per_doc_count.get(doc_id, 0) >= per_doc_cap
                 max_div = max(cosine_similarity(emb, s_emb) for _s, _d, s_emb in selected)
                 mmr = mmr_lambda * sim - (1 - mmr_lambda) * max_div
+                if hit_cap:
+                    mmr -= 0.5  # strong penalty, only chosen if no better option
                 if mmr > best_score:
                     best_score = mmr
                     best_idx = i
             if best_idx == -1:
                 break
-            selected.append(remaining.pop(best_idx))
+            _take(best_idx)
 
     out: List[Dict[str, Any]] = []
     for score, c, _emb in selected:
