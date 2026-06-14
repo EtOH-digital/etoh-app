@@ -88,13 +88,11 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
-        name="profile"
+        name="hub"
         options={{
-          title: t("tabs.profile"),
-          tabBarIcon: ({ color, size }) => (
-            <TabIcon name="person-outline" color={color} size={size} />
-          ),
-          tabBarButtonTestID: "nav-profile-button",
+          title: t("tabs.hub"),
+          tabBarIcon: ({ color }) => <TabIcon letter="H" color={color} size={22} />,
+          tabBarButtonTestID: "nav-hub-button",
         }}
       />
     </Tabs>

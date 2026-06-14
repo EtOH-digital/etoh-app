@@ -1672,6 +1672,203 @@ async def profile_auto_extract(
     return {"updated": updates, "learned_fields": list(updates.keys())}
 
 
+# ---------- Hub — Business Hub (universal portfolio) ----------
+import re as _re_slug
+
+
+def _slugify(text: str) -> str:
+    if not text:
+        return ""
+    s = text.strip().lower()
+    s = _re_slug.sub(r"[àáâãäå]", "a", s)
+    s = _re_slug.sub(r"[èéêë]", "e", s)
+    s = _re_slug.sub(r"[ìíîï]", "i", s)
+    s = _re_slug.sub(r"[òóôõö]", "o", s)
+    s = _re_slug.sub(r"[ùúûü]", "u", s)
+    s = _re_slug.sub(r"[ç]", "c", s)
+    s = _re_slug.sub(r"[ñ]", "n", s)
+    s = _re_slug.sub(r"[^a-z0-9]+", "-", s)
+    s = s.strip("-")
+    return s[:48] or "hub"
+
+
+async def _ensure_hub_slug(current_user: Dict[str, Any]) -> str:
+    """Make sure the user has a stable, unique public slug for their Hub."""
+    existing = (current_user.get("business_profile") or {}).get("hub_slug")
+    if existing:
+        return existing
+    base = _slugify(
+        (current_user.get("business_profile") or {}).get("business_name")
+        or current_user.get("name")
+        or current_user.get("email", "").split("@")[0]
+        or "hub"
+    )
+    candidate = base
+    n = 1
+    while True:
+        clash = await db.users.find_one(
+            {"business_profile.hub_slug": candidate, "user_id": {"$ne": current_user["user_id"]}},
+            {"user_id": 1},
+        )
+        if not clash:
+            break
+        n += 1
+        candidate = f"{base}-{n}"
+    await db.users.update_one(
+        {"user_id": current_user["user_id"]},
+        {"$set": {"business_profile.hub_slug": candidate}},
+    )
+    return candidate
+
+
+HUB_ITEM_TYPES = {"product", "service", "document"}
+
+
+class HubItemIn(BaseModel):
+    type: str = Field(..., pattern="^(product|service|document)$")
+    name: str = Field(..., min_length=1, max_length=180)
+    category: Optional[str] = Field(None, max_length=80)
+    price: Optional[float] = Field(None, ge=0)
+    currency: Optional[str] = Field("EUR", max_length=8)
+    description: Optional[str] = Field(None, max_length=4000)
+    image_url: Optional[str] = Field(None, max_length=800)
+    doc_url: Optional[str] = Field(None, max_length=800)
+    tags: Optional[List[str]] = None
+    available_markets: Optional[List[str]] = None
+    sort_order: Optional[int] = 0
+    featured: Optional[bool] = False
+
+
+class HubItemPatch(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=180)
+    category: Optional[str] = Field(None, max_length=80)
+    price: Optional[float] = Field(None, ge=0)
+    currency: Optional[str] = Field(None, max_length=8)
+    description: Optional[str] = Field(None, max_length=4000)
+    image_url: Optional[str] = Field(None, max_length=800)
+    doc_url: Optional[str] = Field(None, max_length=800)
+    tags: Optional[List[str]] = None
+    available_markets: Optional[List[str]] = None
+    sort_order: Optional[int] = None
+    featured: Optional[bool] = None
+
+
+def _strip_item(it: Dict[str, Any]) -> Dict[str, Any]:
+    out = {k: v for k, v in it.items() if k != "_id"}
+    return out
+
+
+@api.get("/hub/me")
+async def hub_get_me(current_user: Dict[str, Any] = Depends(get_current_user)):
+    slug = await _ensure_hub_slug(current_user)
+    bp = current_user.get("business_profile") or {}
+    items_cursor = db.hub_items.find({"user_id": current_user["user_id"]}).sort(
+        [("sort_order", 1), ("created_at", 1)]
+    )
+    items = [_strip_item(it) async for it in items_cursor]
+    return {
+        "slug": slug,
+        "company": {
+            "name": bp.get("business_name") or current_user.get("name"),
+            "business_type": bp.get("business_type"),
+            "region": bp.get("region"),
+            "role": bp.get("role"),
+            "main_products": bp.get("main_products"),
+            "language": bp.get("language") or "fr",
+            "target_countries": bp.get("target_countries") or [],
+            "target_channels": bp.get("target_channels") or [],
+            "synthesis": bp.get("synthesis"),
+        },
+        "items": items,
+    }
+
+
+@api.post("/hub/items")
+async def hub_create_item(
+    payload: HubItemIn,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    if payload.type not in HUB_ITEM_TYPES:
+        raise HTTPException(status_code=400, detail="invalid type")
+    now = _now()
+    item = {
+        "id": f"hub_{uuid.uuid4().hex[:10]}",
+        "user_id": current_user["user_id"],
+        "type": payload.type,
+        "name": payload.name.strip(),
+        "category": (payload.category or "").strip() or None,
+        "price": payload.price,
+        "currency": (payload.currency or "EUR").upper(),
+        "description": (payload.description or "").strip() or None,
+        "image_url": payload.image_url,
+        "doc_url": payload.doc_url,
+        "tags": payload.tags or [],
+        "available_markets": payload.available_markets or [],
+        "sort_order": payload.sort_order or 0,
+        "featured": bool(payload.featured),
+        "created_at": now,
+        "updated_at": now,
+    }
+    await db.hub_items.insert_one(item)
+    return _strip_item(item)
+
+
+@api.patch("/hub/items/{item_id}")
+async def hub_update_item(
+    item_id: str,
+    payload: HubItemPatch,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    update = {k: v for k, v in payload.dict(exclude_unset=True).items() if v is not None}
+    if not update:
+        raise HTTPException(status_code=400, detail="nothing to update")
+    update["updated_at"] = _now()
+    res = await db.hub_items.update_one(
+        {"id": item_id, "user_id": current_user["user_id"]}, {"$set": update}
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="not found")
+    it = await db.hub_items.find_one({"id": item_id})
+    return _strip_item(it)
+
+
+@api.delete("/hub/items/{item_id}")
+async def hub_delete_item(
+    item_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    res = await db.hub_items.delete_one({"id": item_id, "user_id": current_user["user_id"]})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="not found")
+    return {"ok": True}
+
+
+@api.get("/public/hub/{slug}")
+async def public_hub(slug: str):
+    user = await db.users.find_one({"business_profile.hub_slug": slug})
+    if not user:
+        raise HTTPException(status_code=404, detail="hub not found")
+    bp = user.get("business_profile") or {}
+    items_cursor = db.hub_items.find({"user_id": user["user_id"]}).sort(
+        [("sort_order", 1), ("created_at", 1)]
+    )
+    items = [_strip_item(it) async for it in items_cursor]
+    return {
+        "slug": slug,
+        "company": {
+            "name": bp.get("business_name") or user.get("name") or "EtOH Hub",
+            "business_type": bp.get("business_type"),
+            "region": bp.get("region"),
+            "main_products": bp.get("main_products"),
+            "language": bp.get("language") or "fr",
+            "target_countries": bp.get("target_countries") or [],
+            "synthesis_tagline": ((bp.get("synthesis") or {}) or {}).get("tagline"),
+            "synthesis_positioning": ((bp.get("synthesis") or {}) or {}).get("positioning"),
+        },
+        "items": items,
+    }
+
+
 # ---------- US-034 — CRM léger ----------
 class CrmContactStatus(str):
     new = "new"

@@ -10,15 +10,36 @@ import {
   KeyboardAvoidingView,
   Platform,
   Linking,
+  Share as RNShare,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import * as Clipboard from "expo-clipboard";
+import QRCode from "react-native-qrcode-svg";
 
 import { Colors, Spacing, Radii, Fonts } from "@/src/theme";
 import { useAuth } from "@/src/auth/AuthContext";
 import { apiFetch } from "@/src/api/client";
 import { useT, useI18n } from "@/src/i18n/I18nContext";
 import { LANGUAGES } from "@/src/i18n/translations";
+
+type HubItem = {
+  id: string;
+  type: "product" | "service" | "document";
+  name: string;
+  category?: string | null;
+  price?: number | null;
+  currency?: string | null;
+  description?: string | null;
+  image_url?: string | null;
+  doc_url?: string | null;
+  tags?: string[];
+  available_markets?: string[];
+  sort_order?: number;
+  featured?: boolean;
+};
+
+type Segment = "profile" | "catalogue" | "network" | "wallet" | "share" | "settings";
 
 // ---------------------------------------------------------------------------
 // Aligned with onboarding wizard (/app/(onboarding)/index.tsx)
@@ -111,6 +132,71 @@ export default function Profile() {
   const [autoSavedAt, setAutoSavedAt] = useState<number | null>(null);
   const saveTimerRef = useRef<any>(null);
   const firstRunRef = useRef(true);
+
+  // -------- Hub state (segments, items, slug) --------
+  const [segment, setSegment] = useState<Segment>("profile");
+  const [hubSlug, setHubSlug] = useState<string | null>(null);
+  const [hubItems, setHubItems] = useState<HubItem[]>([]);
+  const [hubLoading, setHubLoading] = useState(false);
+
+  const loadHub = useCallback(async () => {
+    setHubLoading(true);
+    try {
+      const r = await apiFetch<{ slug: string; items: HubItem[] }>("/hub/me");
+      setHubSlug(r.slug);
+      setHubItems(r.items || []);
+    } catch {
+      // ignore
+    } finally {
+      setHubLoading(false);
+    }
+  }, []);
+  useEffect(() => {
+    loadHub();
+  }, [loadHub]);
+
+  const publicUrl = useMemo(() => {
+    if (!hubSlug) return "";
+    if (typeof window !== "undefined") return `${window.location.origin}/hub/${hubSlug}`;
+    return `/hub/${hubSlug}`;
+  }, [hubSlug]);
+
+  // -------- CRUD helpers --------
+  const createItem = async (type: "product" | "service") => {
+    const draft = {
+      type,
+      name: type === "product" ? "Nouveau produit" : "Nouveau service",
+      price: type === "product" ? 0 : null,
+      description: "",
+    };
+    const it = await apiFetch<HubItem>("/hub/items", {
+      method: "POST",
+      body: JSON.stringify(draft),
+    });
+    setHubItems((arr) => [...arr, it]);
+  };
+  const patchItem = async (id: string, patch: Partial<HubItem>) => {
+    setHubItems((arr) => arr.map((x) => (x.id === id ? { ...x, ...patch } : x)));
+    try {
+      await apiFetch(`/hub/items/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(patch),
+      });
+    } catch {
+      loadHub();
+    }
+  };
+  const deleteItem = async (id: string) => {
+    setHubItems((arr) => arr.filter((x) => x.id !== id));
+    try {
+      await apiFetch(`/hub/items/${id}`, { method: "DELETE" });
+    } catch {
+      loadHub();
+    }
+  };
+
+  const hubProducts = hubItems.filter((i) => i.type === "product");
+  const hubServices = hubItems.filter((i) => i.type === "service");
 
   // Resync form when the auth context user changes (auto-extract / refresh)
   const lastLearnAt = bp.last_auto_learn_at;
@@ -420,8 +506,50 @@ export default function Profile() {
           </View>
 
           {/* ======================================================== */}
+          {/* SEGMENT BAR — Hub navigation                              */}
+          {/* ======================================================== */}
+          <View style={s.segBarWrap}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={s.segBarRow}
+            >
+              {([
+                { id: "profile", label: t("hub.seg.profile"), icon: "person-outline" },
+                { id: "catalogue", label: t("hub.seg.catalogue"), icon: "albums-outline" },
+                { id: "network", label: t("hub.seg.network"), icon: "people-outline" },
+                { id: "wallet", label: t("hub.seg.wallet"), icon: "card-outline" },
+                { id: "share", label: t("hub.seg.share"), icon: "share-social-outline" },
+                { id: "settings", label: t("hub.seg.settings"), icon: "settings-outline" },
+              ] as const).map((seg) => {
+                const active = segment === seg.id;
+                return (
+                  <TouchableOpacity
+                    key={seg.id}
+                    testID={`hub-seg-${seg.id}`}
+                    onPress={() => setSegment(seg.id as Segment)}
+                    style={[s.segBtn, active && s.segBtnActive]}
+                    activeOpacity={0.85}
+                  >
+                    <Ionicons
+                      name={seg.icon as any}
+                      size={14}
+                      color={active ? "#fff" : Colors.textSecondary}
+                    />
+                    <Text style={[s.segBtnText, active && { color: "#fff" }]}>
+                      {seg.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+
+          {/* ======================================================== */}
           {/* SECTION 1 — Mon entreprise                                */}
           {/* ======================================================== */}
+          {segment === "profile" && (
+            <>
           <SectionHeader title={t("profile.section.company")} icon="business-outline" />
 
           <Text style={s.label}>Nom de l&apos;entreprise</Text>
@@ -691,6 +819,9 @@ export default function Profile() {
           {/* ======================================================== */}
           {/* SECTION 7 — CRM                                           */}
           {/* ======================================================== */}
+          </>)}
+          {segment === "network" && (
+            <>
           <SectionHeader title={`${t("profile.section.crm")} (${crmItems.length})`} icon="people-outline">
             {crmItems.length > 0 && (
               <TouchableOpacity onPress={exportCsv} style={s.csvBtn} testID="crm-export">
@@ -740,6 +871,9 @@ export default function Profile() {
           {/* ======================================================== */}
           {/* SECTION 8 — Wallet                                        */}
           {/* ======================================================== */}
+          </>)}
+          {segment === "wallet" && (
+            <>
           <SectionHeader title={t("profile.section.wallet")} icon="card-outline" />
           <View style={s.walletCard} testID="wallet-card">
             <View style={s.walletRow}>
@@ -808,6 +942,9 @@ export default function Profile() {
           </View>
 
           {/* Brand Voice */}
+          </>)}
+          {segment === "settings" && (
+            <>
           <SectionHeader title={t("profile.section.brandVoice")} icon="color-palette-outline" />
           <Text style={s.sectionSub}>L&apos;IA utilise ces traits pour rédiger comme vous.</Text>
           {(() => {
@@ -841,6 +978,29 @@ export default function Profile() {
             <Ionicons name="log-out-outline" size={18} color={Colors.error} />
             <Text style={s.logoutText}>{t("profile.logout")}</Text>
           </TouchableOpacity>
+          </>)}
+
+          {/* ======================================================== */}
+          {/* CATALOGUE — Products & Services                          */}
+          {/* ======================================================== */}
+          {segment === "catalogue" && (
+            <CatalogueView
+              products={hubProducts}
+              services={hubServices}
+              loading={hubLoading}
+              onCreate={createItem}
+              onPatch={patchItem}
+              onDelete={deleteItem}
+              t={t}
+            />
+          )}
+
+          {/* ======================================================== */}
+          {/* SHARE — Public URL + QR code                             */}
+          {/* ======================================================== */}
+          {segment === "share" && (
+            <ShareView slug={hubSlug} publicUrl={publicUrl} company={businessName} t={t} />
+          )}
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -1088,7 +1248,80 @@ const s = StyleSheet.create({
   smallChipActive: { backgroundColor: Colors.brandPrimary, borderColor: Colors.brandPrimary },
   smallChipText: { fontFamily: Fonts.body, fontSize: 12, color: Colors.text },
 
-  // CRM
+  // Hub segment bar
+  segBarWrap: {
+    marginTop: Spacing.md,
+    marginBottom: Spacing.sm,
+    marginHorizontal: -Spacing.lg,
+    paddingHorizontal: Spacing.lg,
+  },
+  segBarRow: { flexDirection: "row", gap: 8, paddingRight: Spacing.lg },
+  segBtn: {
+    flexDirection: "row", alignItems: "center", gap: 5,
+    paddingHorizontal: 12, paddingVertical: 8,
+    borderRadius: Radii.pill,
+    borderWidth: 1, borderColor: Colors.border,
+    backgroundColor: Colors.bgSecondary,
+  },
+  segBtnActive: { backgroundColor: Colors.text, borderColor: Colors.text },
+  segBtnText: { fontFamily: Fonts.bodyMedium, fontSize: 12, color: Colors.textSecondary, fontWeight: "700" },
+
+  // Catalogue
+  catCard: {
+    borderWidth: 1, borderColor: Colors.border, borderRadius: Radii.md,
+    backgroundColor: Colors.bgSecondary, padding: Spacing.md, marginTop: Spacing.sm, gap: 8,
+  },
+  catRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  catType: {
+    paddingHorizontal: 8, paddingVertical: 3,
+    borderRadius: Radii.pill, backgroundColor: Colors.bgTertiary,
+  },
+  catTypeText: { fontFamily: Fonts.bodyMedium, fontSize: 10, color: Colors.textSecondary, fontWeight: "700" },
+  catName: {
+    flex: 1, fontFamily: Fonts.bodyMedium, fontSize: 14, color: Colors.text,
+    fontWeight: "700",
+  },
+  catDel: { padding: 6, borderRadius: 6, backgroundColor: Colors.bgTertiary },
+  catInput: {
+    borderWidth: 1, borderColor: Colors.border, borderRadius: Radii.sm,
+    paddingHorizontal: 10, paddingVertical: 8,
+    fontSize: 13, color: Colors.text, backgroundColor: Colors.bg, fontFamily: Fonts.body,
+  },
+  addCatBtn: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6,
+    borderWidth: 1, borderColor: Colors.border, borderStyle: "dashed",
+    borderRadius: Radii.md, paddingVertical: 12, marginTop: Spacing.md,
+  },
+  addCatBtnText: { color: Colors.text, fontFamily: Fonts.bodyMedium, fontWeight: "700", fontSize: 13 },
+
+  // Share
+  shareCard: {
+    borderWidth: 1, borderColor: Colors.border, borderRadius: Radii.lg,
+    backgroundColor: Colors.bgSecondary, padding: Spacing.lg, alignItems: "center",
+    marginTop: Spacing.md,
+  },
+  shareTitle: { fontFamily: Fonts.headingBold, fontSize: 18, color: Colors.text, marginBottom: 6 },
+  shareSub: { fontFamily: Fonts.body, fontSize: 12, color: Colors.textSecondary, marginBottom: Spacing.md, textAlign: "center" },
+  qrBox: {
+    padding: Spacing.md, backgroundColor: "#fff",
+    borderRadius: Radii.md,
+    marginVertical: Spacing.md,
+  },
+  shareUrl: {
+    fontFamily: Fonts.body, fontSize: 13, color: Colors.text,
+    backgroundColor: Colors.bgTertiary, paddingHorizontal: 10, paddingVertical: 8,
+    borderRadius: Radii.sm, marginTop: Spacing.sm,
+  },
+  shareActions: { flexDirection: "row", gap: 8, marginTop: Spacing.md, width: "100%" },
+  shareBtn: {
+    flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5,
+    paddingVertical: 10, borderRadius: Radii.md, backgroundColor: Colors.brandPrimary,
+  },
+  shareBtnGhost: { backgroundColor: Colors.bgTertiary },
+  shareBtnText: { color: "#fff", fontFamily: Fonts.bodyMedium, fontWeight: "700", fontSize: 13 },
+  shareBtnGhostText: { color: Colors.text, fontFamily: Fonts.bodyMedium, fontWeight: "700", fontSize: 13 },
+
+  // CRM (existing)
   emptyHint: { fontFamily: Fonts.body, fontSize: 12, color: Colors.textMuted, fontStyle: "italic" },
   crmCard: {
     borderWidth: 1, borderColor: Colors.border, borderRadius: Radii.md,
@@ -1162,3 +1395,216 @@ const s = StyleSheet.create({
   },
   logoutText: { color: Colors.error, fontFamily: Fonts.bodyMedium, fontWeight: "600", fontSize: 14 },
 });
+
+
+// ---------------------------------------------------------------------------
+// CatalogueView — Products & Services CRUD (universal portfolio)
+// ---------------------------------------------------------------------------
+function CatalogueView({
+  products,
+  services,
+  loading,
+  onCreate,
+  onPatch,
+  onDelete,
+  t,
+}: {
+  products: HubItem[];
+  services: HubItem[];
+  loading: boolean;
+  onCreate: (type: "product" | "service") => Promise<void>;
+  onPatch: (id: string, p: Partial<HubItem>) => Promise<void>;
+  onDelete: (id: string) => Promise<void>;
+  t: (k: string, vars?: Record<string, string | number>) => string;
+}) {
+  return (
+    <View>
+      <View style={s.sectionHead}>
+        <View style={s.sectionTitleRow}>
+          <Ionicons name="albums-outline" size={16} color={Colors.text} />
+          <Text style={s.sectionTitle}>{t("hub.cat.products")}</Text>
+        </View>
+        <Text style={{ fontFamily: Fonts.body, fontSize: 11, color: Colors.textMuted }}>
+          {products.length}
+        </Text>
+      </View>
+      <Text style={s.sectionSub}>{t("hub.cat.productsHint")}</Text>
+      {loading && <ActivityIndicator color={Colors.brandPrimary} />}
+      {products.map((p) => (
+        <ItemCard key={p.id} item={p} onPatch={onPatch} onDelete={onDelete} t={t} />
+      ))}
+      <TouchableOpacity
+        testID="hub-add-product"
+        style={s.addCatBtn}
+        onPress={() => onCreate("product")}
+        activeOpacity={0.85}
+      >
+        <Ionicons name="add-circle-outline" size={16} color={Colors.text} />
+        <Text style={s.addCatBtnText}>{t("hub.cat.addProduct")}</Text>
+      </TouchableOpacity>
+
+      <View style={[s.sectionHead, { marginTop: Spacing.xl }]}>
+        <View style={s.sectionTitleRow}>
+          <Ionicons name="briefcase-outline" size={16} color={Colors.text} />
+          <Text style={s.sectionTitle}>{t("hub.cat.services")}</Text>
+        </View>
+        <Text style={{ fontFamily: Fonts.body, fontSize: 11, color: Colors.textMuted }}>
+          {services.length}
+        </Text>
+      </View>
+      <Text style={s.sectionSub}>{t("hub.cat.servicesHint")}</Text>
+      {services.map((sv) => (
+        <ItemCard key={sv.id} item={sv} onPatch={onPatch} onDelete={onDelete} t={t} />
+      ))}
+      <TouchableOpacity
+        testID="hub-add-service"
+        style={s.addCatBtn}
+        onPress={() => onCreate("service")}
+        activeOpacity={0.85}
+      >
+        <Ionicons name="add-circle-outline" size={16} color={Colors.text} />
+        <Text style={s.addCatBtnText}>{t("hub.cat.addService")}</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+function ItemCard({
+  item,
+  onPatch,
+  onDelete,
+  t,
+}: {
+  item: HubItem;
+  onPatch: (id: string, p: Partial<HubItem>) => Promise<void>;
+  onDelete: (id: string) => Promise<void>;
+  t: (k: string) => string;
+}) {
+  const [name, setName] = useState(item.name);
+  const [category, setCategory] = useState(item.category || "");
+  const [price, setPrice] = useState(item.price != null ? String(item.price) : "");
+  const [description, setDescription] = useState(item.description || "");
+  const timerRef = useRef<any>(null);
+
+  useEffect(() => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => {
+      const patch: Partial<HubItem> = {};
+      if (name !== item.name) patch.name = name;
+      if (category !== (item.category || "")) patch.category = category;
+      const np = price ? parseFloat(price) : null;
+      const op = item.price != null ? item.price : null;
+      if (np !== op) patch.price = np as any;
+      if (description !== (item.description || "")) patch.description = description;
+      if (Object.keys(patch).length > 0) onPatch(item.id, patch);
+    }, 700);
+    return () => timerRef.current && clearTimeout(timerRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [name, category, price, description]);
+
+  return (
+    <View style={s.catCard} testID={`hub-item-${item.id}`}>
+      <View style={s.catRow}>
+        <View style={s.catType}>
+          <Text style={s.catTypeText}>{item.type === "product" ? "PRODUCT" : "SERVICE"}</Text>
+        </View>
+        <TextInput style={[s.catName]} value={name} onChangeText={setName} />
+        <TouchableOpacity
+          onPress={() => onDelete(item.id)}
+          style={s.catDel}
+          testID={`hub-item-del-${item.id}`}
+          hitSlop={6}
+        >
+          <Ionicons name="trash-outline" size={14} color={Colors.error} />
+        </TouchableOpacity>
+      </View>
+      <TextInput
+        style={s.catInput}
+        placeholder={t("hub.cat.categoryPh")}
+        placeholderTextColor={Colors.textMuted}
+        value={category}
+        onChangeText={setCategory}
+      />
+      {item.type === "product" && (
+        <TextInput
+          style={s.catInput}
+          placeholder={t("hub.cat.pricePh")}
+          placeholderTextColor={Colors.textMuted}
+          value={price}
+          onChangeText={setPrice}
+          keyboardType="numeric"
+        />
+      )}
+      <TextInput
+        style={[s.catInput, { minHeight: 70, textAlignVertical: "top" }]}
+        placeholder={t("hub.cat.descPh")}
+        placeholderTextColor={Colors.textMuted}
+        value={description}
+        onChangeText={setDescription}
+        multiline
+      />
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ShareView — Public URL + QR code
+// ---------------------------------------------------------------------------
+function ShareView({
+  slug,
+  publicUrl,
+  company,
+  t,
+}: {
+  slug: string | null;
+  publicUrl: string;
+  company: string;
+  t: (k: string) => string;
+}) {
+  if (!slug) {
+    return (
+      <View style={s.shareCard}>
+        <ActivityIndicator color={Colors.brandPrimary} />
+      </View>
+    );
+  }
+  const open = () => Linking.openURL(publicUrl);
+  const copy = async () => {
+    await Clipboard.setStringAsync(publicUrl);
+  };
+  const share = async () => {
+    try {
+      await RNShare.share({
+        message: `${company ? company + " — " : ""}${publicUrl}`,
+        url: publicUrl,
+        title: t("hub.share.shareTitle"),
+      });
+    } catch {}
+  };
+  return (
+    <View style={s.shareCard}>
+      <Text style={s.shareTitle}>{t("hub.share.title")}</Text>
+      <Text style={s.shareSub}>{t("hub.share.subtitle")}</Text>
+      <View style={s.qrBox}>
+        <QRCode value={publicUrl} size={180} backgroundColor="#fff" />
+      </View>
+      <Text style={s.shareUrl} selectable>
+        {publicUrl}
+      </Text>
+      <View style={s.shareActions}>
+        <TouchableOpacity testID="hub-share-copy" style={[s.shareBtn, s.shareBtnGhost]} onPress={copy}>
+          <Ionicons name="copy-outline" size={14} color={Colors.text} />
+          <Text style={s.shareBtnGhostText}>{t("common.copy")}</Text>
+        </TouchableOpacity>
+        <TouchableOpacity testID="hub-share-open" style={[s.shareBtn, s.shareBtnGhost]} onPress={open}>
+          <Ionicons name="open-outline" size={14} color={Colors.text} />
+          <Text style={s.shareBtnGhostText}>{t("hub.share.open")}</Text>
+        </TouchableOpacity>
+        <TouchableOpacity testID="hub-share-share" style={s.shareBtn} onPress={share}>
+          <Ionicons name="share-outline" size={14} color="#fff" />
+          <Text style={s.shareBtnText}>{t("common.share")}</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}

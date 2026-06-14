@@ -24,6 +24,10 @@ function RootNav() {
     const inAuth = top === "(auth)";
     const inOnboarding = top === "(onboarding)";
     const inLang = top === "(lang)";
+    const inPublicHub = top === "hub";
+
+    // Public hub pages are always accessible (no auth, no language picker).
+    if (inPublicHub) return;
 
     // Language not picked yet → force language picker first.
     if (!hasPickedLang) {
