@@ -991,6 +991,7 @@ export default function Profile() {
               onCreate={createItem}
               onPatch={patchItem}
               onDelete={deleteItem}
+              onAfterImport={loadHub}
               t={t}
             />
           )}
@@ -1294,6 +1295,45 @@ const s = StyleSheet.create({
   },
   addCatBtnText: { color: Colors.text, fontFamily: Fonts.bodyMedium, fontWeight: "700", fontSize: 13 },
 
+  // Import IA
+  importCard: {
+    flexDirection: "row", alignItems: "center", gap: 12,
+    padding: Spacing.md,
+    borderRadius: Radii.lg,
+    borderWidth: 1, borderColor: Colors.brandPrimary,
+    backgroundColor: Colors.brandPrimarySoft,
+    marginTop: Spacing.md,
+  },
+  importIcon: {
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: Colors.brandPrimary,
+    alignItems: "center", justifyContent: "center",
+  },
+  importTitle: { fontFamily: Fonts.headingBold, fontSize: 14, color: Colors.text },
+  importSub: { fontFamily: Fonts.body, fontSize: 12, color: Colors.textSecondary, marginTop: 2 },
+  importPanel: {
+    marginTop: 10, padding: Spacing.md,
+    borderRadius: Radii.md, backgroundColor: Colors.bgSecondary,
+    borderWidth: 1, borderColor: Colors.border,
+  },
+  importTabs: { flexDirection: "row", gap: 8 },
+  importTab: {
+    flexDirection: "row", alignItems: "center", gap: 5,
+    paddingHorizontal: 12, paddingVertical: 8,
+    borderRadius: Radii.pill,
+    borderWidth: 1, borderColor: Colors.border,
+    backgroundColor: Colors.bg,
+  },
+  importTabActive: { backgroundColor: Colors.text, borderColor: Colors.text },
+  importTabText: { fontFamily: Fonts.bodyMedium, fontSize: 12, color: Colors.textSecondary, fontWeight: "700" },
+  importResult: { fontFamily: Fonts.body, fontSize: 12, color: Colors.textSecondary, marginTop: 8 },
+  importRun: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6,
+    backgroundColor: Colors.brandPrimary, borderRadius: Radii.md, paddingVertical: 12,
+    marginTop: 12,
+  },
+  importRunText: { color: "#fff", fontFamily: Fonts.bodyMedium, fontWeight: "700", fontSize: 13 },
+
   // Share
   shareCard: {
     borderWidth: 1, borderColor: Colors.border, borderRadius: Radii.lg,
@@ -1407,6 +1447,7 @@ function CatalogueView({
   onCreate,
   onPatch,
   onDelete,
+  onAfterImport,
   t,
 }: {
   products: HubItem[];
@@ -1415,11 +1456,148 @@ function CatalogueView({
   onCreate: (type: "product" | "service") => Promise<void>;
   onPatch: (id: string, p: Partial<HubItem>) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
+  onAfterImport: () => Promise<void>;
   t: (k: string, vars?: Record<string, string | number>) => string;
 }) {
+  const [importOpen, setImportOpen] = useState(false);
+  const [importMode, setImportMode] = useState<"url" | "text">("text");
+  const [importInput, setImportInput] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<string | null>(null);
+
+  const runImport = async () => {
+    setImporting(true);
+    setImportResult(null);
+    try {
+      const r = await apiFetch<{ products_created: number; services_created: number }>(
+        "/hub/extract",
+        {
+          method: "POST",
+          body: JSON.stringify({ source_type: importMode, source: importInput.trim() }),
+        }
+      );
+      await onAfterImport();
+      setImportResult(
+        t("hub.import.success", {
+          p: r.products_created,
+          s: r.services_created,
+        })
+      );
+      setImportInput("");
+    } catch (e: any) {
+      setImportResult(`⚠️ ${e?.message || "Erreur"}`);
+    } finally {
+      setImporting(false);
+    }
+  };
+
   return (
     <View>
-      <View style={s.sectionHead}>
+      {/* ---- Import IA banner ---- */}
+      <TouchableOpacity
+        testID="hub-import-open"
+        style={s.importCard}
+        onPress={() => setImportOpen((x) => !x)}
+        activeOpacity={0.85}
+      >
+        <View style={s.importIcon}>
+          <Ionicons name="sparkles" size={18} color="#fff" />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={s.importTitle}>{t("hub.import.title")}</Text>
+          <Text style={s.importSub}>{t("hub.import.subtitle")}</Text>
+        </View>
+        <Ionicons
+          name={importOpen ? "chevron-up" : "chevron-down"}
+          size={18}
+          color={Colors.textSecondary}
+        />
+      </TouchableOpacity>
+
+      {importOpen && (
+        <View style={s.importPanel}>
+          <View style={s.importTabs}>
+            <TouchableOpacity
+              testID="hub-import-tab-text"
+              style={[s.importTab, importMode === "text" && s.importTabActive]}
+              onPress={() => setImportMode("text")}
+            >
+              <Ionicons
+                name="create-outline"
+                size={14}
+                color={importMode === "text" ? "#fff" : Colors.textSecondary}
+              />
+              <Text style={[s.importTabText, importMode === "text" && { color: "#fff" }]}>
+                {t("hub.import.tabText")}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              testID="hub-import-tab-url"
+              style={[s.importTab, importMode === "url" && s.importTabActive]}
+              onPress={() => setImportMode("url")}
+            >
+              <Ionicons
+                name="globe-outline"
+                size={14}
+                color={importMode === "url" ? "#fff" : Colors.textSecondary}
+              />
+              <Text style={[s.importTabText, importMode === "url" && { color: "#fff" }]}>
+                {t("hub.import.tabUrl")}
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          <TextInput
+            testID="hub-import-input"
+            style={[
+              s.catInput,
+              {
+                minHeight: importMode === "text" ? 110 : 44,
+                textAlignVertical: "top",
+                marginTop: 10,
+              },
+            ]}
+            placeholder={
+              importMode === "url"
+                ? t("hub.import.urlPh")
+                : t("hub.import.textPh")
+            }
+            placeholderTextColor={Colors.textMuted}
+            value={importInput}
+            onChangeText={setImportInput}
+            multiline={importMode === "text"}
+            autoCapitalize="none"
+          />
+
+          {importResult && (
+            <Text style={s.importResult} testID="hub-import-result">
+              {importResult}
+            </Text>
+          )}
+
+          <TouchableOpacity
+            testID="hub-import-run"
+            style={[
+              s.importRun,
+              (!importInput.trim() || importing) && { opacity: 0.5 },
+            ]}
+            disabled={!importInput.trim() || importing}
+            onPress={runImport}
+            activeOpacity={0.85}
+          >
+            {importing ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <>
+                <Ionicons name="sparkles" size={14} color="#fff" />
+                <Text style={s.importRunText}>{t("hub.import.run")}</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        </View>
+      )}
+
+      <View style={[s.sectionHead, { marginTop: Spacing.lg }]}>
         <View style={s.sectionTitleRow}>
           <Ionicons name="albums-outline" size={16} color={Colors.text} />
           <Text style={s.sectionTitle}>{t("hub.cat.products")}</Text>

@@ -1869,6 +1869,212 @@ async def public_hub(slug: str):
     }
 
 
+# ---------- Hub IA extraction (URL scrape / free text → products & services) ----------
+class HubExtractIn(BaseModel):
+    source_type: str = Field(..., pattern="^(url|text)$")
+    source: str = Field(..., min_length=2, max_length=200_000)
+
+
+async def _fetch_url_text(url: str) -> str:
+    """Best-effort web scraper: returns plain text from URL (truncated to ~20k chars)."""
+    import requests
+    from bs4 import BeautifulSoup
+
+    if not url.startswith("http"):
+        url = "https://" + url
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 12_0) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+        ),
+        "Accept-Language": "fr,en;q=0.9",
+    }
+    try:
+        r = requests.get(url, headers=headers, timeout=20)
+        r.raise_for_status()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Impossible de charger l'URL : {e}")
+    soup = BeautifulSoup(r.text, "lxml")
+    for tag in soup(["script", "style", "noscript", "iframe", "svg", "footer", "nav"]):
+        tag.decompose()
+    text = soup.get_text(separator="\n", strip=True)
+    # Compact multiple newlines
+    text = "\n".join([ln.strip() for ln in text.splitlines() if ln.strip()])
+    return text[:20_000]
+
+
+@api.post("/hub/extract")
+async def hub_extract(
+    payload: HubExtractIn,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Ingest a URL or free text and create draft products/services via the LLM."""
+    bp = current_user.get("business_profile") or {}
+    lang = bp.get("language") or "fr"
+
+    if payload.source_type == "url":
+        material = await _fetch_url_text(payload.source.strip())
+    else:
+        material = payload.source.strip()
+
+    if len(material) < 30:
+        raise HTTPException(status_code=400, detail="Contenu trop court pour extraire quoi que ce soit.")
+
+    extract_prompt = (
+        "You are an EXTRACTOR for a wine/spirits/drinks B2B app. Read the supplied source "
+        "(website text or free description) and identify the COMPANY's commercial offering. "
+        "Output STRICT JSON with the following shape (no markdown, no fences, no commentary):\n\n"
+        "{\n"
+        '  "company": {\n'
+        '    "name": str | null,\n'
+        '    "business_type": "winery|cooperative|merchant|importer|distributor|restaurant|brewery|distillery|wine_shop|other" | null,\n'
+        '    "region": str | null,\n'
+        '    "positioning": str | null,\n'
+        '    "tagline": str | null\n'
+        "  },\n"
+        '  "products": [ {\n'
+        '    "name": str (required),\n'
+        '    "category": str | null,\n'
+        '    "price": number | null,\n'
+        '    "currency": "EUR" | "USD" | "GBP" | null,\n'
+        '    "description": str (1-3 sentences, factual),\n'
+        '    "tags": [str]\n'
+        "  } ],\n"
+        '  "services": [ {\n'
+        '    "name": str (required),\n'
+        '    "category": str | null,\n'
+        '    "description": str (1-3 sentences),\n'
+        '    "tags": [str]\n'
+        "  } ]\n"
+        "}\n\n"
+        "RULES:\n"
+        "- Never invent — if a price is not stated, use null.\n"
+        "- Limit to at most 20 products and 10 services.\n"
+        "- Trim duplicates (same name).\n"
+        "- Skip generic site sections (legal, blog, careers, login, cookies).\n"
+        f"- Write descriptions in {('French' if lang == 'fr' else 'English' if lang == 'en' else 'Portuguese' if lang == 'pt' else 'Spanish')}.\n\n"
+        f"SOURCE:\n\"\"\"{material}\"\"\""
+    )
+
+    chat = _make_chat(
+        session_id=f"hub_extract_{current_user['user_id']}_{uuid.uuid4().hex[:6]}",
+        system_message="You output ONLY valid JSON. No prose, no markdown, no code fences.",
+    )
+    try:
+        raw = await chat.send_message(UserMessage(text=extract_prompt))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"LLM error: {e}")
+
+    import json
+    import re
+    cleaned = re.sub(r"^```(?:json)?|```$", "", (raw or "").strip(), flags=re.MULTILINE).strip()
+    try:
+        parsed = json.loads(cleaned) if cleaned else {}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"LLM returned invalid JSON: {e}")
+
+    company = parsed.get("company") or {}
+    products = parsed.get("products") or []
+    services = parsed.get("services") or []
+    if not isinstance(products, list):
+        products = []
+    if not isinstance(services, list):
+        services = []
+
+    # Update business_profile (only empty fields, never overwrite)
+    company_updates: Dict[str, Any] = {}
+    if isinstance(company.get("name"), str) and not bp.get("business_name"):
+        company_updates["business_profile.business_name"] = company["name"].strip()[:120]
+    if isinstance(company.get("region"), str) and not bp.get("region"):
+        company_updates["business_profile.region"] = company["region"].strip()[:120]
+    if isinstance(company.get("business_type"), str) and not bp.get("business_type"):
+        if company["business_type"] in {
+            "winery", "cooperative", "merchant", "importer", "distributor",
+            "restaurant", "brewery", "distillery", "wine_shop", "other",
+        }:
+            company_updates["business_profile.business_type"] = company["business_type"]
+    # Soft "synthesis" enrichment if missing
+    syn = bp.get("synthesis") or {}
+    if isinstance(company.get("tagline"), str) and not syn.get("tagline"):
+        syn["tagline"] = company["tagline"].strip()[:200]
+        company_updates["business_profile.synthesis"] = syn
+    if isinstance(company.get("positioning"), str) and not syn.get("positioning"):
+        syn["positioning"] = company["positioning"].strip()[:500]
+        company_updates["business_profile.synthesis"] = syn
+    if company_updates:
+        await db.users.update_one({"user_id": current_user["user_id"]}, {"$set": company_updates})
+
+    # Insert items
+    now = _now()
+    created_items: List[Dict[str, Any]] = []
+
+    def _norm_currency(c: Any) -> str:
+        if not isinstance(c, str):
+            return "EUR"
+        cu = c.strip().upper()
+        return cu if cu in {"EUR", "USD", "GBP", "CHF", "CAD"} else "EUR"
+
+    for idx, p in enumerate(products[:20]):
+        name = p.get("name") if isinstance(p, dict) else None
+        if not isinstance(name, str) or not name.strip():
+            continue
+        price = p.get("price")
+        if not isinstance(price, (int, float)):
+            price = None
+        item = {
+            "id": f"hub_{uuid.uuid4().hex[:10]}",
+            "user_id": current_user["user_id"],
+            "type": "product",
+            "name": name.strip()[:180],
+            "category": (str(p.get("category")).strip()[:80] if p.get("category") else None),
+            "price": float(price) if price is not None else None,
+            "currency": _norm_currency(p.get("currency")),
+            "description": (str(p.get("description")).strip()[:4000] if p.get("description") else None),
+            "image_url": None,
+            "doc_url": None,
+            "tags": [str(t)[:40] for t in (p.get("tags") or []) if t][:8],
+            "available_markets": [],
+            "sort_order": idx,
+            "featured": False,
+            "created_at": now,
+            "updated_at": now,
+        }
+        await db.hub_items.insert_one(item)
+        created_items.append(_strip_item(item))
+
+    for idx, sv in enumerate(services[:10]):
+        name = sv.get("name") if isinstance(sv, dict) else None
+        if not isinstance(name, str) or not name.strip():
+            continue
+        item = {
+            "id": f"hub_{uuid.uuid4().hex[:10]}",
+            "user_id": current_user["user_id"],
+            "type": "service",
+            "name": name.strip()[:180],
+            "category": (str(sv.get("category")).strip()[:80] if sv.get("category") else None),
+            "price": None,
+            "currency": "EUR",
+            "description": (str(sv.get("description")).strip()[:4000] if sv.get("description") else None),
+            "image_url": None,
+            "doc_url": None,
+            "tags": [str(t)[:40] for t in (sv.get("tags") or []) if t][:8],
+            "available_markets": [],
+            "sort_order": idx,
+            "featured": False,
+            "created_at": now,
+            "updated_at": now,
+        }
+        await db.hub_items.insert_one(item)
+        created_items.append(_strip_item(item))
+
+    return {
+        "products_created": sum(1 for x in created_items if x["type"] == "product"),
+        "services_created": sum(1 for x in created_items if x["type"] == "service"),
+        "company_updated": bool(company_updates),
+        "items": created_items,
+    }
+
+
 # ---------- US-034 — CRM léger ----------
 class CrmContactStatus(str):
     new = "new"
