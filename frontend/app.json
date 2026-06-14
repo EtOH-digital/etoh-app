@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "EtOH",
-    "slug": "etoh",
+    "name": "EtOH App",
+    "slug": "etoh-app",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -16,7 +16,7 @@
       "package": "com.etoh.app",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#FAFAF9"
+        "backgroundColor": "#2C2D2C"
       },
       "edgeToEdgeEnabled": true
     },
@@ -33,7 +33,7 @@
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 200,
           "resizeMode": "contain",
-          "backgroundColor": "#FAFAF9"
+          "backgroundColor": "#2C2D2C"
         }
       ],
       "expo-font",

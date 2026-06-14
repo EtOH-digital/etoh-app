@@ -7,6 +7,12 @@ export default function Root({ children }: PropsWithChildren) {
     <html lang="en" style={{ height: "100%" }}>
       <head>
         <meta charSet="utf-8" />
+        <title>EtOH App</title>
+        <meta name="description" content="EtOH App — Your AI commercial director for wine & spirits." />
+        <link rel="icon" type="image/png" href="/assets/assets/images/favicon.png" />
+        <link rel="shortcut icon" type="image/png" href="/assets/assets/images/favicon.png" />
+        <link rel="apple-touch-icon" href="/assets/assets/images/favicon.png" />
+        <meta name="theme-color" content="#2C2D2C" />
         <meta httpEquiv="X-UA-Compatible" content="IE=edge" />
         <meta
           name="viewport"
