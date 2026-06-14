@@ -20,6 +20,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { Colors, Spacing, Radii, Fonts } from "@/src/theme";
 import { apiFetch } from "@/src/api/client";
 import { useAuth } from "@/src/auth/AuthContext";
+import MarkdownText from "@/src/components/MarkdownText";
 
 export type ChatMsg = {
   role: "user" | "assistant";
@@ -195,9 +196,13 @@ export default function ChatScreen({
                 testID={`${testID}-msg-${i}`}
                 style={[s.bubble, m.role === "user" ? s.userBubble : s.aiBubble]}
               >
-                <Text style={m.role === "user" ? s.userText : s.aiText} selectable>
-                  {m.content}
-                </Text>
+                {m.role === "user" ? (
+                  <Text style={s.userText} selectable>
+                    {m.content}
+                  </Text>
+                ) : (
+                  <MarkdownText text={m.content} style={s.aiText} linkColor={color} />
+                )}
                 {m.role === "assistant" && m.copyable && !!m.content && (
                   <View style={s.bubbleActions}>
                     <TouchableOpacity
