@@ -207,6 +207,30 @@ frontend:
         agent: "main"
         comment: "Added a 'Ouvrir directement :' row below the AI-drafted action buttons on every prospect card. Three circular icon buttons: mailto:target.email, wa.me/{cleaned-phone}, and LinkedIn (uses target.linkedin_url if present, otherwise builds a LinkedIn people search URL with contact_name + company name as keywords). Disabled state with low opacity when the corresponding field is missing. Renamed the existing AI buttons to 'Email IA / WhatsApp IA / LinkedIn IA' with a sparkles icon to clearly differentiate. Linking is already imported in pilot.tsx so no new deps."
 
+  - task: "Refactor #1 — Extract core/ shared infrastructure + first route module (admin)"
+    implemented: true
+    working: true
+    file: "backend/core/db.py, backend/core/security.py, backend/core/rate_limit.py, backend/routes/admin.py, backend/routes/__init__.py, backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "Phase 1 refactor (safe + foundational). Created: core/db.py (mongo_client+db+_now), core/security.py (get_current_user + create_jwt + hash/verify_password — passlib bcrypt), core/rate_limit.py (llm_rate_limit per-user + _ip_rate_limit_check per-IP with X-Forwarded-For), and routes/admin.py (admin router with X-Admin-Key dep + /admin/health + /admin/metrics/summary + /admin/users/{uid}/credits). server.py now imports from these modules and includes admin_router; old inline definitions removed. server.py shrunk from 3306 → 3115 lines (-191). All endpoints still 200: /api/, /api/auth/me, /api/admin/health (with key), /api/subscription/plans, /api/hub/me, /api/admin/metrics/summary (returns proper JSON). Bcrypt warning is cosmetic (passlib 1.7.4 vs bcrypt 5.x — non-blocking, password hash still works). NEXT (refactor phase 2 — deferred): extract routes/subscription.py, routes/public_hub.py, routes/enrich.py, routes/wallet.py, routes/auth.py from server.py."
+
+  - task: "Phase 2 — RAG / Embeddings (PDF/DOCX/URL ingestion + cosine similarity)"
+    implemented: false
+    working: false
+    file: "backend/routes/rag.py (planned)"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: false
+        agent: "main"
+        comment: "NOT YET STARTED — next task in queue."
+
 agent_communication:
   - agent: "main"
-    message: "Phases C & D delivered. Phase C: public Hub chat with feature gating (Pro+) + lead capture creating prospects + Resend email notifications. Phase D: CRM deep links on prospect cards (mailto/wa.me/LinkedIn) + EAN enrichment endpoint via OpenFoodFacts. Skipped Phase 2 (RAG) by user choice. Skipped server.py refactor (3rd time flagged but user prefers feature work). Need testing_agent to validate: 1) POST /api/public/hub/{slug}/chat returns 402 when owner is on free plan, 200 when Pro+ (use admin API to upgrade test user to Pro: PATCH user subscription manually OR have testing_agent set user.subscription={plan_id:'pro', status:'active'} via Mongo before the test); 2) chat with valid Pro owner: send 3 messages, verify reply contains product references from the Hub, verify user_message_count increments correctly; 3) lead endpoint creates prospect row in prospects collection with source='hub_public_chat' and hub_slug field; 4) rate limit 10/min triggers 429 after 10 hits; 5) GET /api/enrich/ean/3017620422003 (Nutella — known to exist) returns 200 with name/brand; invalid EAN '12' returns 400; non-existent EAN returns 404; 6) regression: all previous endpoints still work."
+    message: "Phase 1 refactor done & validated. Core modules + admin router extracted. server.py -191 lines. Pattern validated, more routes to extract in next iteration (subscription, public_hub, enrich, etc.) — deferred to avoid context overrun. Moving to RAG ingestion next as per user roadmap."

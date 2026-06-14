@@ -96,8 +96,21 @@ if SENTRY_ENABLED:
 # ---------------------------------------------------------------------------
 # DB
 # ---------------------------------------------------------------------------
-mongo_client = AsyncIOMotorClient(MONGO_URL)
-db = mongo_client[DB_NAME]
+# MongoDB client + tiny helpers — moved to core.db so route modules can share.
+from core.db import mongo_client, db, _now  # noqa: E402,F401
+# Auth dependencies + JWT helpers — moved to core.security.
+from core.security import (  # noqa: E402
+    get_current_user,
+    create_jwt as _create_jwt,
+    hash_password as _bcrypt_hash,
+    verify_password as _bcrypt_verify,
+)
+# Rate limiters — moved to core.rate_limit.
+from core.rate_limit import (  # noqa: E402,F401
+    llm_rate_limit,
+    _ip_rate_limit_check,
+    _client_ip,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -195,25 +208,10 @@ class HomeRecommendationsIn(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Auth helpers
+# Auth helpers (the JWT + bcrypt + get_current_user live in core.security now)
 # ---------------------------------------------------------------------------
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
-
-
 def _new_user_id() -> str:
     return f"user_{uuid.uuid4().hex[:12]}"
-
-
-def _create_jwt(user_id: str, email: str) -> str:
-    now = _now()
-    payload = {
-        "sub": user_id,
-        "email": email,
-        "iat": int(now.timestamp()),
-        "exp": int((now + timedelta(minutes=JWT_EXP_MINUTES)).timestamp()),
-    }
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 
 def _serialize_user(doc: Dict[str, Any]) -> UserOut:
@@ -226,38 +224,6 @@ def _serialize_user(doc: Dict[str, Any]) -> UserOut:
         business_profile=doc.get("business_profile"),
         credits=int(doc.get("credits", 0)),
     )
-
-
-async def get_current_user(authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
-    if not authorization or not authorization.lower().startswith("bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
-    token = authorization.split(" ", 1)[1].strip()
-
-    # Try JWT first
-    user_id: Optional[str] = None
-    try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        user_id = payload.get("sub")
-    except jwt.PyJWTError:
-        # Not a JWT — treat as Google session_token
-        session = await db.user_sessions.find_one({"session_token": token}, {"_id": 0})
-        if not session:
-            raise HTTPException(status_code=401, detail="Invalid token")
-        # Normalize expires_at
-        exp = session.get("expires_at")
-        if exp and exp.tzinfo is None:
-            exp = exp.replace(tzinfo=timezone.utc)
-        if exp and exp < _now():
-            raise HTTPException(status_code=401, detail="Session expired")
-        user_id = session.get("user_id")
-
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Invalid token payload")
-
-    user = await db.users.find_one({"user_id": user_id}, {"_id": 0})
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
-    return user
 
 
 # ---------------------------------------------------------------------------
@@ -379,64 +345,9 @@ async def _rl_handler(_request, exc):
     )
 
 
-# ---- In-memory per-user rate limiter for LLM endpoints ----
-from collections import defaultdict, deque
-import time as _time
-
-_USER_HITS: Dict[str, deque] = defaultdict(deque)
-_IP_HITS: Dict[str, deque] = defaultdict(deque)
-
-
-def llm_rate_limit(max_per_minute: int = 20):
-    """Per-user rate limiter (sliding 60s window). Use as a FastAPI Depends.
-
-    Default cap: 20 LLM calls / user / minute — enough for fast typing,
-    blocks scripted abuse. Increase to 40 for very cheap endpoints.
-    """
-
-    async def _dep(current_user: Dict[str, Any] = Depends(get_current_user)):
-        uid = current_user["user_id"]
-        now = _time.time()
-        dq = _USER_HITS[uid]
-        # drop old hits
-        while dq and dq[0] < now - 60:
-            dq.popleft()
-        if len(dq) >= max_per_minute:
-            raise HTTPException(
-                status_code=429,
-                detail=f"Trop de requêtes IA — patientez quelques secondes (limite: {max_per_minute}/min).",
-            )
-        dq.append(now)
-        return current_user
-
-    return _dep
-
-
-def _ip_rate_limit_check(request: Request, key: str, max_per_minute: int) -> None:
-    """Per-IP sliding-window rate limit for anonymous/public endpoints.
-
-    Used in place of `@limiter.limit(...)` because slowapi 0.1.10 mis-handles
-    Pydantic body params on FastAPI 0.110+ (gets parsed as a query param).
-    Raise 429 when over budget.
-    """
-    # Behind K8s ingress, request.client.host is the proxy pod IP (rotates).
-    # Prefer X-Forwarded-For (first hop = real client) when present.
-    xff = request.headers.get("x-forwarded-for") or request.headers.get("X-Forwarded-For")
-    if xff:
-        ip = xff.split(",")[0].strip()
-    else:
-        ip = (request.client.host if request.client else "unknown") or "unknown"
-    bucket_key = f"{key}:{ip}"
-    now = _time.time()
-    dq = _IP_HITS[bucket_key]
-    while dq and dq[0] < now - 60:
-        dq.popleft()
-    if len(dq) >= max_per_minute:
-        raise HTTPException(
-            status_code=429,
-            detail=f"Too many requests — please slow down (limit: {max_per_minute}/min).",
-        )
-    dq.append(now)
+# ---- In-memory per-user rate limiter for LLM endpoints (impl in core.rate_limit) ----
+from collections import defaultdict, deque  # noqa: E402,F401
+import time as _time  # noqa: E402,F401
 
 
 @api.get("/")
@@ -836,111 +747,10 @@ async def get_my_features(user=Depends(get_current_user)):
 
 
 # ---------------------------------------------------------------------------
-# Admin API (X-Admin-Key header) — for etoh.io/studio/admin back-office
+# Admin API — moved to routes/admin.py (X-Admin-Key + metrics + credits grant)
 # ---------------------------------------------------------------------------
-ETOH_ADMIN_API_KEY = os.environ.get("ETOH_ADMIN_API_KEY", "")
-
-
-async def require_admin_key(request: Request) -> None:
-    """FastAPI dependency: validates the X-Admin-Key header.
-
-    Use as: ` _: None = Depends(require_admin_key)` on any admin-only route.
-    Returns 401 if missing, 403 if mismatch, 503 if admin not configured.
-    """
-    if not ETOH_ADMIN_API_KEY:
-        raise HTTPException(503, "admin api not configured")
-    provided = request.headers.get("x-admin-key") or request.headers.get("X-Admin-Key")
-    if not provided:
-        raise HTTPException(401, "missing X-Admin-Key header")
-    if not hmac.compare_digest(provided, ETOH_ADMIN_API_KEY):
-        raise HTTPException(403, "invalid admin key")
-
-
-@api.get("/admin/health")
-async def admin_health(_: None = Depends(require_admin_key)):
-    """Sanity-check endpoint for the admin back-office — proves the key works."""
-    return {"ok": True, "service": "etoh-api", "ts": _now().isoformat()}
-
-
-@api.get("/admin/metrics/summary")
-async def admin_metrics_summary(_: None = Depends(require_admin_key)):
-    """Aggregated metrics for the admin dashboard (`etoh.io/studio/admin`).
-
-    Returns: users count, active subscriptions, MRR estimate, total credits consumed,
-    Hub items count, public Hub views, LLM events 30d.
-    """
-    users_count = await db.users.count_documents({})
-    active_subs = await db.users.count_documents({"subscription.status": {"$in": ["active", "trialing"]}})
-    hub_items = await db.hub_items.count_documents({})
-    # MRR: sum credits_monthly€ × active subs per plan
-    mrr_cursor = db.users.aggregate([
-        {"$match": {"subscription.status": {"$in": ["active", "trialing"]}}},
-        {"$group": {"_id": "$subscription.plan_id", "count": {"$sum": 1}}},
-    ])
-    mrr_eur = 0.0
-    by_plan: Dict[str, int] = {}
-    async for row in mrr_cursor:
-        pid = row["_id"]
-        plan = PLAN_BY_ID.get(pid)
-        if plan:
-            mrr_eur += plan["price_eur"] * row["count"]
-            by_plan[pid] = row["count"]
-    # Signups last 30 days
-    since = _now() - timedelta(days=30)
-    signups_30d = await db.users.count_documents({"created_at": {"$gte": since}})
-    # Credits spent (wallet_events with negative or via llm_events if any)
-    llm_events_30d = 0
-    try:
-        llm_events_30d = await db.llm_events.count_documents({"created_at": {"$gte": since}})
-    except Exception:
-        pass
-    # Public hub views
-    hub_views = 0
-    try:
-        agg = db.hub_items.aggregate([{"$group": {"_id": None, "total": {"$sum": "$views"}}}])
-        async for row in agg:
-            hub_views = int(row.get("total") or 0)
-    except Exception:
-        pass
-
-    return {
-        "users_count": users_count,
-        "active_subscriptions": active_subs,
-        "subscriptions_by_plan": by_plan,
-        "mrr_eur": round(mrr_eur, 2),
-        "arr_eur": round(mrr_eur * 12, 2),
-        "signups_30d": signups_30d,
-        "hub_items": hub_items,
-        "hub_public_views": hub_views,
-        "llm_events_30d": llm_events_30d,
-        "generated_at": _now().isoformat(),
-    }
-
-
-@api.post("/admin/users/{user_id}/credits")
-async def admin_grant_credits(
-    user_id: str,
-    payload: Dict[str, Any],
-    _: None = Depends(require_admin_key),
-):
-    """Grant or revoke credits to a user manually (from the admin back-office)."""
-    delta = int(payload.get("delta") or 0)
-    reason = str(payload.get("reason") or "admin_grant")
-    if delta == 0:
-        raise HTTPException(400, "delta must be non-zero")
-    res = await db.users.update_one({"user_id": user_id}, {"$inc": {"credits": delta}})
-    if res.matched_count == 0:
-        raise HTTPException(404, "user not found")
-    await db.wallet_events.insert_one({
-        "id": f"adm_{uuid.uuid4().hex[:10]}",
-        "user_id": user_id,
-        "credits": delta,
-        "source": "admin",
-        "reason": reason,
-        "created_at": _now(),
-    })
-    user_doc = await db.users.find_one({"user_id": user_id})
-    return {"ok": True, "user_id": user_id, "credits": int(user_doc.get("credits") or 0)}
+from routes.admin import router as admin_router  # noqa: E402
+app.include_router(admin_router)
 
 
 # ---------- Auth ----------
