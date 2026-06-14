@@ -1,14 +1,8 @@
 import { Colors } from "@/src/theme";
 import { apiFetch } from "@/src/api/client";
 import { useAuth } from "@/src/auth/AuthContext";
+import { useT, useI18n } from "@/src/i18n/I18nContext";
 import ChatScreen, { SendHelpers } from "@/src/components/ChatScreen";
-
-const SUGGESTIONS = [
-  "Écris un post LinkedIn pour le lancement de notre nouveau millésime",
-  "Rédige un email pour relancer un caviste après un salon",
-  "Description premium d'un chardonnay biologique",
-  "Message commercial pour un nouveau distributeur",
-];
 
 type Template =
   | "linkedin_post"
@@ -18,48 +12,44 @@ type Template =
   | "trade_show_followup"
   | "commercial_presentation";
 
-/** Lightweight keyword-based template detection so the user can just chat. */
 function detectTemplate(text: string): Template {
   const t = text.toLowerCase();
-  if (/(linkedin|post|publication|réseau)/.test(t)) return "linkedin_post";
-  if (/(email|mail|newsletter|campagne|relanc)/.test(t)) {
-    return /salon|trade ?show|prowein|wine paris|vinexpo|foire/.test(t)
+  if (/(linkedin|post|publication|réseau|publicación)/.test(t)) return "linkedin_post";
+  if (/(email|mail|newsletter|campagne|relanc|campanha|campaña)/.test(t)) {
+    return /salon|trade ?show|prowein|wine paris|vinexpo|foire|feria|feira/.test(t)
       ? "trade_show_followup"
       : "email_campaign";
   }
-  if (/(description|fiche produit|cuvée|cépage|millésime)/.test(t)) return "product_description";
-  if (/(présentation|deck|pitch|argumentaire)/.test(t)) return "commercial_presentation";
+  if (/(description|fiche produit|cuvée|cépage|millésime|añada|vintage|safra)/.test(t)) return "product_description";
+  if (/(présentation|deck|pitch|argumentaire|presentación|apresentação)/.test(t)) return "commercial_presentation";
   return "sales_message";
 }
 
-/** Keyword-based tone detection. */
 function detectTone(text: string): "professional" | "warm" | "premium" | "casual" {
   const t = text.toLowerCase();
-  if (/(premium|luxe|haut de gamme|grand cru|prestige)/.test(t)) return "premium";
-  if (/(chaleureux|amical|sympa|proche)/.test(t)) return "warm";
-  if (/(direct|casual|décontracté|familier)/.test(t)) return "casual";
+  if (/(premium|luxe|haut de gamme|grand cru|prestige|lujo)/.test(t)) return "premium";
+  if (/(chaleureux|amical|sympa|proche|warm|friendly|cordial|amigável)/.test(t)) return "warm";
+  if (/(direct|casual|décontracté|familier|informal)/.test(t)) return "casual";
   return "professional";
 }
 
 export default function Studio() {
   const { user } = useAuth();
+  const t = useT();
+  const { lang } = useI18n();
 
   const handleSend = async (text: string, helpers: SendHelpers) => {
-    const lang = user?.business_profile?.language || "fr";
+    const apiLang = (user?.business_profile?.language || lang) as string;
     const data = await apiFetch<{ content: string; template: string }>("/studio/generate", {
       method: "POST",
       body: JSON.stringify({
         template: detectTemplate(text),
         brief: text,
         tone: detectTone(text),
-        language: lang,
+        language: apiLang,
       }),
     });
-    helpers.appendAssistant({
-      role: "assistant",
-      content: data.content,
-      copyable: true,
-    });
+    helpers.appendAssistant({ role: "assistant", content: data.content, copyable: true });
   };
 
   return (
@@ -67,10 +57,10 @@ export default function Studio() {
       testID="studio"
       color={Colors.studio}
       logo={require("../../assets/brand/studio.png")}
-      emptyTitle="Que voulez-vous créer ?"
-      emptySub="Décrivez votre besoin (post, email, description…). Studio rédige dans votre voix de marque."
-      suggestions={SUGGESTIONS}
-      placeholder="Décrivez le contenu à générer…"
+      emptyTitle={t("studio.empty.title")}
+      emptySub={t("studio.empty.sub")}
+      suggestions={[t("studio.sug.1"), t("studio.sug.2"), t("studio.sug.3"), t("studio.sug.4")]}
+      placeholder={t("studio.placeholder")}
       onSend={handleSend}
     />
   );

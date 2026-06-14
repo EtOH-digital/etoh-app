@@ -20,6 +20,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { Colors, Spacing, Radii, Fonts } from "@/src/theme";
 import { apiFetch } from "@/src/api/client";
 import { useAuth } from "@/src/auth/AuthContext";
+import { useT } from "@/src/i18n/I18nContext";
 import MarkdownText from "@/src/components/MarkdownText";
 
 export type ChatMsg = {
@@ -69,6 +70,7 @@ export default function ChatScreen({
 }: Props) {
   const params = useLocalSearchParams<{ prompt?: string }>();
   const { refresh } = useAuth();
+  const tr = useT();
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -151,7 +153,8 @@ export default function ChatScreen({
           <View style={[s.learnedBanner, { borderColor: color }]} testID={`${testID}-learned`}>
             <Ionicons name="bulb-outline" size={14} color={color} />
             <Text style={s.learnedText}>
-              J&apos;ai appris : <Text style={{ fontWeight: "700" }}>{labelLearned(learned)}</Text>. Sauvegardé sur votre profil.
+              {tr("chat.learned")}{" "}
+              <Text style={{ fontWeight: "700" }}>{labelLearned(learned, tr)}</Text>. {tr("chat.learned.saved")}
             </Text>
           </View>
         )}
@@ -410,6 +413,14 @@ const FIELD_LABELS_FR: Record<string, string> = {
   target_channels: "canaux cibles",
 };
 
-function labelLearned(fields: string[]): string {
-  return fields.map((f) => FIELD_LABELS_FR[f] || f).join(", ");
+function labelLearned(fields: string[], tr: (k: string) => string): string {
+  return fields
+    .map((f) => {
+      // Map snake_case keys to short i18n labels via translation if available.
+      const k = `learn.${f}`;
+      const v = tr(k);
+      if (v && v !== k) return v;
+      return FIELD_LABELS_FR[f] || f;
+    })
+    .join(", ");
 }

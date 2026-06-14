@@ -3,6 +3,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { Platform, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Colors } from "@/src/theme";
+import { useT } from "@/src/i18n/I18nContext";
 
 const TAB_COLORS: Record<string, string> = {
   index: Colors.text,
@@ -35,6 +36,7 @@ function TabIcon({
 
 export default function TabsLayout() {
   const insets = useSafeAreaInsets();
+  const t = useT();
   return (
     <Tabs
       screenOptions={({ route }) => ({
@@ -56,7 +58,7 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: "Accueil",
+          title: t("tabs.home"),
           tabBarIcon: ({ color, size }) => <TabIcon name="home-outline" color={color} size={size} />,
           tabBarButtonTestID: "nav-home-button",
         }}
@@ -64,7 +66,7 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="coach"
         options={{
-          title: "Coach",
+          title: t("tabs.coach"),
           tabBarIcon: ({ color }) => <TabIcon letter="C" color={color} size={22} />,
           tabBarButtonTestID: "nav-coach-button",
         }}
@@ -72,7 +74,7 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="studio"
         options={{
-          title: "Studio",
+          title: t("tabs.studio"),
           tabBarIcon: ({ color }) => <TabIcon letter="S" color={color} size={22} />,
           tabBarButtonTestID: "nav-studio-button",
         }}
@@ -80,7 +82,7 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="pilot"
         options={{
-          title: "Pilot",
+          title: t("tabs.pilot"),
           tabBarIcon: ({ color }) => <TabIcon letter="P" color={color} size={22} />,
           tabBarButtonTestID: "nav-pilot-button",
         }}
@@ -88,7 +90,7 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="profile"
         options={{
-          title: "Profil",
+          title: t("tabs.profile"),
           tabBarIcon: ({ color, size }) => (
             <TabIcon name="person-outline" color={color} size={size} />
           ),

@@ -17,6 +17,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { Colors, Spacing, Radii, Fonts } from "@/src/theme";
 import { useAuth } from "@/src/auth/AuthContext";
 import { apiFetch } from "@/src/api/client";
+import { useT, useI18n } from "@/src/i18n/I18nContext";
+import { LANGUAGES } from "@/src/i18n/translations";
 
 // ---------------------------------------------------------------------------
 // Aligned with onboarding wizard (/app/(onboarding)/index.tsx)
@@ -82,6 +84,8 @@ const STATUS_OPTS = [
 // ---------------------------------------------------------------------------
 export default function Profile() {
   const { user, logout, updateProfile, refresh } = useAuth();
+  const t = useT();
+  const { lang: appLang, setLang: setAppLang } = useI18n();
   const bp: any = user?.business_profile || {};
 
   // --- Form state (mirrors onboarding) ---
@@ -334,10 +338,10 @@ export default function Profile() {
             </View>
             <Text style={s.savingHint}>
               {autoSaving
-                ? "Enregistrement…"
+                ? t("profile.savingNow")
                 : autoSavedAt
-                ? "✓ Enregistré automatiquement"
-                : `Profil rempli à ${completion}%`}
+                ? t("profile.savedAuto")
+                : t("profile.completion", { p: completion })}
             </Text>
           </View>
 
@@ -345,11 +349,11 @@ export default function Profile() {
             <View style={s.learnBanner} testID="profile-learn-banner">
               <Ionicons name="bulb" size={14} color={Colors.brandPrimary} />
               <Text style={s.learnText}>
-                EtOH a appris automatiquement :{" "}
+                {t("profile.learnedBanner")}{" "}
                 <Text style={{ fontWeight: "700" }}>
                   {(bp.last_auto_learn_fields || []).join(", ")}
                 </Text>{" "}
-                via {bp.last_auto_learn_source || "chat"}.
+                · {bp.last_auto_learn_source || "chat"}.
               </Text>
             </View>
           )}
@@ -357,7 +361,7 @@ export default function Profile() {
           {/* AI Commercial Profile */}
           <View style={s.synthCard} testID="commercial-profile">
             <View style={s.synthHead}>
-              <Text style={s.synthBadge}>PROFIL COMMERCIAL · IA</Text>
+              <Text style={s.synthBadge}>{t("profile.commercialBadge")}</Text>
               <TouchableOpacity
                 onPress={regenSynthesis}
                 disabled={synthesizing}
@@ -377,13 +381,13 @@ export default function Profile() {
                 )}
                 {!!synthesis.positioning && (
                   <View style={s.synthBlock}>
-                    <Text style={s.synthLabel}>Positionnement</Text>
+                    <Text style={s.synthLabel}>{t("profile.positioning")}</Text>
                     <Text style={s.synthValue}>{synthesis.positioning}</Text>
                   </View>
                 )}
                 {Array.isArray(synthesis.icp) && synthesis.icp.length > 0 && (
                   <View style={s.synthBlock}>
-                    <Text style={s.synthLabel}>ICP — Acheteurs cibles</Text>
+                    <Text style={s.synthLabel}>{t("profile.icp")}</Text>
                     {synthesis.icp.map((it: any, i: number) => (
                       <View key={i} style={s.icpRow}>
                         <Text style={s.icpLabel}>• {it.label}</Text>
@@ -394,7 +398,7 @@ export default function Profile() {
                 )}
                 {Array.isArray(synthesis.priorities) && synthesis.priorities.length > 0 && (
                   <View style={s.synthBlock}>
-                    <Text style={s.synthLabel}>Priorités commerciales</Text>
+                    <Text style={s.synthLabel}>{t("profile.priorities")}</Text>
                     {synthesis.priorities.map((p: string, i: number) => (
                       <Text key={i} style={s.priorityRow}>
                         {i + 1}. {p}
@@ -418,7 +422,7 @@ export default function Profile() {
           {/* ======================================================== */}
           {/* SECTION 1 — Mon entreprise                                */}
           {/* ======================================================== */}
-          <SectionHeader title="Mon entreprise" icon="business-outline" />
+          <SectionHeader title={t("profile.section.company")} icon="business-outline" />
 
           <Text style={s.label}>Nom de l&apos;entreprise</Text>
           <TextInput
@@ -471,32 +475,32 @@ export default function Profile() {
             placeholderTextColor={Colors.textMuted}
           />
 
-          <Text style={s.label}>Langue</Text>
-          <View style={s.chipsRow}>
-            <TouchableOpacity
-              testID="profile-lang-fr"
-              style={[s.smallChip, language === "fr" && s.smallChipActive]}
-              onPress={() => setLanguage("fr")}
-            >
-              <Text style={[s.smallChipText, language === "fr" && { color: "#fff" }]}>
-                Français
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              testID="profile-lang-en"
-              style={[s.smallChip, language === "en" && s.smallChipActive]}
-              onPress={() => setLanguage("en")}
-            >
-              <Text style={[s.smallChipText, language === "en" && { color: "#fff" }]}>
-                English
-              </Text>
-            </TouchableOpacity>
+          <Text style={s.label}>{t("common.language")}</Text>
+          <View style={s.chipsWrap}>
+            {LANGUAGES.map((l) => {
+              const active = appLang === l.code;
+              return (
+                <TouchableOpacity
+                  key={l.code}
+                  testID={`profile-lang-${l.code}`}
+                  style={[s.smallChip, active && s.smallChipActive]}
+                  onPress={() => {
+                    setAppLang(l.code);
+                    setLanguage(l.code === "en" || l.code === "fr" ? l.code : "fr");
+                  }}
+                >
+                  <Text style={[s.smallChipText, active && { color: "#fff" }]}>
+                    {l.flag} {l.native}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
           </View>
 
           {/* ======================================================== */}
           {/* SECTION 2 — Chiffre d'affaires                            */}
           {/* ======================================================== */}
-          <SectionHeader title="Chiffre d'affaires annuel" icon="trending-up-outline" />
+          <SectionHeader title={t("profile.section.revenue")} icon="trending-up-outline" />
           <View style={{ gap: 8 }}>
             {REVENUES.map((r) => {
               const active = revenue === r.id;
@@ -527,7 +531,7 @@ export default function Profile() {
           {/* ======================================================== */}
           {/* SECTION 3 — Objectifs                                     */}
           {/* ======================================================== */}
-          <SectionHeader title="Objectifs commerciaux" icon="flag-outline" />
+          <SectionHeader title={t("profile.section.objectives")} icon="flag-outline" />
           <View style={{ gap: 8 }}>
             {OBJECTIVES.map((o) => {
               const active = objectives.includes(o.id);
@@ -558,7 +562,7 @@ export default function Profile() {
           {/* ======================================================== */}
           {/* SECTION 4 — Produits                                      */}
           {/* ======================================================== */}
-          <SectionHeader title="Que vendez-vous ?" icon="cube-outline" />
+          <SectionHeader title={t("profile.section.products")} icon="cube-outline" />
           <View style={s.chipsWrap}>
             {PRODUCTS.map((p) => {
               const active = products.includes(p.id);
@@ -589,7 +593,7 @@ export default function Profile() {
           {/* ======================================================== */}
           {/* SECTION 5 — Prix & marchés                                */}
           {/* ======================================================== */}
-          <SectionHeader title="Prix & marchés cibles" icon="cash-outline" />
+          <SectionHeader title={t("profile.section.prices")} icon="cash-outline" />
 
           <Text style={s.label}>Prix moyen bouteille (€)</Text>
           <TextInput
@@ -650,7 +654,7 @@ export default function Profile() {
           {/* ======================================================== */}
           {/* SECTION 6 — Objectifs hebdomadaires                       */}
           {/* ======================================================== */}
-          <SectionHeader title="Objectifs hebdomadaires" icon="speedometer-outline" />
+          <SectionHeader title={t("profile.section.weekly")} icon="speedometer-outline" />
           <Text style={s.label}>Prospects identifiés / semaine</Text>
           <TextInput
             testID="profile-goal-prospects"
@@ -687,11 +691,11 @@ export default function Profile() {
           {/* ======================================================== */}
           {/* SECTION 7 — CRM                                           */}
           {/* ======================================================== */}
-          <SectionHeader title={`Mes prospects (${crmItems.length})`} icon="people-outline">
+          <SectionHeader title={`${t("profile.section.crm")} (${crmItems.length})`} icon="people-outline">
             {crmItems.length > 0 && (
               <TouchableOpacity onPress={exportCsv} style={s.csvBtn} testID="crm-export">
                 <Ionicons name="download-outline" size={14} color={Colors.brandPrimary} />
-                <Text style={s.csvBtnText}>Export CSV</Text>
+                <Text style={s.csvBtnText}>{t("profile.crm.exportCsv")}</Text>
               </TouchableOpacity>
             )}
           </SectionHeader>
@@ -736,7 +740,7 @@ export default function Profile() {
           {/* ======================================================== */}
           {/* SECTION 8 — Wallet                                        */}
           {/* ======================================================== */}
-          <SectionHeader title="Wallet" icon="card-outline" />
+          <SectionHeader title={t("profile.section.wallet")} icon="card-outline" />
           <View style={s.walletCard} testID="wallet-card">
             <View style={s.walletRow}>
               <View>
@@ -781,7 +785,7 @@ export default function Profile() {
           </View>
 
           {/* Action costs */}
-          <SectionHeader title="Coût des actions" icon="pricetag-outline" />
+          <SectionHeader title={t("profile.section.costs")} icon="pricetag-outline" />
           <View style={s.costsCard}>
             {[
               { label: "Analyse Coach", cost: 1 },
@@ -804,7 +808,7 @@ export default function Profile() {
           </View>
 
           {/* Brand Voice */}
-          <SectionHeader title="Brand Voice" icon="color-palette-outline" />
+          <SectionHeader title={t("profile.section.brandVoice")} icon="color-palette-outline" />
           <Text style={s.sectionSub}>L&apos;IA utilise ces traits pour rédiger comme vous.</Text>
           {(() => {
             const tone = bp.brand_voice_tone || ["professionnel", "expert", "accessible"];
@@ -835,7 +839,7 @@ export default function Profile() {
 
           <TouchableOpacity testID="profile-logout" style={s.logoutBtn} onPress={logout}>
             <Ionicons name="log-out-outline" size={18} color={Colors.error} />
-            <Text style={s.logoutText}>Se déconnecter</Text>
+            <Text style={s.logoutText}>{t("profile.logout")}</Text>
           </TouchableOpacity>
         </ScrollView>
       </KeyboardAvoidingView>

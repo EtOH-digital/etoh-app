@@ -16,6 +16,7 @@ import * as Clipboard from "expo-clipboard";
 import { Colors, Spacing, Radii, Fonts } from "@/src/theme";
 import { apiFetch } from "@/src/api/client";
 import { useAuth } from "@/src/auth/AuthContext";
+import { useT, useI18n } from "@/src/i18n/I18nContext";
 import ChatScreen, { SendHelpers } from "@/src/components/ChatScreen";
 
 type Target = {
@@ -43,15 +44,13 @@ type SearchResult = {
 type Channel = "email" | "whatsapp" | "linkedin";
 type Draft = { subject?: string | null; body: string; channel: Channel };
 
-const SUGGESTIONS = [
-  "Trouve-moi des cavistes à Paris orientés vins nature",
-  "Importateurs de vin bio en Belgique",
-  "Restaurants étoilés à Lyon ouverts aux nouveaux fournisseurs",
-  "Distributeurs de spiritueux à New York",
-];
+const STATUS_KEYS: Channel[] = ["email", "whatsapp", "linkedin"];
+void STATUS_KEYS;
 
 export default function PilotScreen() {
   const { user, refresh } = useAuth();
+  const t = useT();
+  const { lang } = useI18n();
   const credits = user?.credits ?? 0;
 
   // Track the latest search so the modal can post to /pilot/draft etc.
@@ -69,14 +68,14 @@ export default function PilotScreen() {
   const [actionStatus, setActionStatus] = useState<string | null>(null);
 
   const handleSend = async (text: string, helpers: SendHelpers) => {
-    const lang = user?.business_profile?.language || "fr";
+    const apiLang = (user?.business_profile?.language || lang) as string;
     const data = await apiFetch<SearchResult>("/pilot/search", {
       method: "POST",
-      body: JSON.stringify({ query: text, language: lang }),
+      body: JSON.stringify({ query: text, language: apiLang }),
     });
     setLatestSearch(data);
     const intro =
-      `🎯 ${data.targets.length} cibles trouvées pour « ${data.query} »` +
+      t("chat.targetsFound", { n: data.targets.length, q: data.query }) +
       (data.interpretation ? `\n\n${data.interpretation}` : "");
     helpers.appendAssistant({
       role: "assistant",

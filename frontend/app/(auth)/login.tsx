@@ -15,10 +15,12 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { Colors, Spacing, Radii, Fonts } from "@/src/theme";
 import { useAuth } from "@/src/auth/AuthContext";
+import { useT } from "@/src/i18n/I18nContext";
 import { HexDots } from "@/src/components/HexDots";
 
 export default function Login() {
   const { login, signup, googleLogin } = useAuth();
+  const t = useT();
   const [mode, setMode] = useState<"login" | "signup">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -29,7 +31,7 @@ export default function Login() {
   const submit = async () => {
     setErr(null);
     if (!email || !password) {
-      setErr("Email et mot de passe requis");
+      setErr(t("login.email") + " / " + t("login.password"));
       return;
     }
     setLoading(true);
@@ -77,8 +79,8 @@ export default function Login() {
             />
             <HexDots size={10} gap={12} />
             <Text style={s.tagline}>
-              Vendez plus, vendez mieux.{"\n"}
-              Learn. Create. Sell.
+              {t("login.tagline")}{"\n"}
+              {t("login.subtitle")}
             </Text>
           </View>
 
@@ -89,7 +91,7 @@ export default function Login() {
                 style={[s.tab, mode === "login" && s.tabActive]}
                 onPress={() => setMode("login")}
               >
-                <Text style={[s.tabText, mode === "login" && s.tabTextActive]}>Connexion</Text>
+                <Text style={[s.tabText, mode === "login" && s.tabTextActive]}>{t("login.signIn")}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 testID="auth-tab-signup"
@@ -97,7 +99,7 @@ export default function Login() {
                 onPress={() => setMode("signup")}
               >
                 <Text style={[s.tabText, mode === "signup" && s.tabTextActive]}>
-                  Créer un compte
+                  {t("login.signUp")}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -105,7 +107,7 @@ export default function Login() {
             {mode === "signup" && (
               <TextInput
                 testID="auth-name-input"
-                placeholder="Nom (optionnel)"
+                placeholder={t("login.name")}
                 placeholderTextColor={Colors.textMuted}
                 style={s.input}
                 value={name}
@@ -115,7 +117,7 @@ export default function Login() {
             )}
             <TextInput
               testID="auth-email-input"
-              placeholder="Email"
+              placeholder={t("login.email")}
               placeholderTextColor={Colors.textMuted}
               style={s.input}
               value={email}
@@ -126,7 +128,7 @@ export default function Login() {
             />
             <TextInput
               testID="auth-password-input"
-              placeholder="Mot de passe (min. 6)"
+              placeholder={t("login.password")}
               placeholderTextColor={Colors.textMuted}
               style={s.input}
               value={password}
@@ -152,14 +154,14 @@ export default function Login() {
                 <ActivityIndicator color="#fff" />
               ) : (
                 <Text style={s.primaryBtnText}>
-                  {mode === "login" ? "Se connecter" : "Créer mon compte"}
+                  {mode === "login" ? t("login.signIn") : t("login.signUp")}
                 </Text>
               )}
             </TouchableOpacity>
 
             <View style={s.divider}>
               <View style={s.dividerLine} />
-              <Text style={s.dividerText}>ou</Text>
+              <Text style={s.dividerText}>{t("login.or")}</Text>
               <View style={s.dividerLine} />
             </View>
 
@@ -171,13 +173,11 @@ export default function Login() {
               activeOpacity={0.85}
             >
               <Ionicons name="logo-google" size={18} color={Colors.text} />
-              <Text style={s.googleBtnText}>Continuer avec Google</Text>
+              <Text style={s.googleBtnText}>{t("login.continueGoogle")}</Text>
             </TouchableOpacity>
           </View>
 
-          <Text style={s.footer}>
-            En continuant, vous acceptez les conditions d'utilisation.
-          </Text>
+          <Text style={s.footer}>{t("login.terms")}</Text>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
