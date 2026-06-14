@@ -18,13 +18,13 @@ import logging
 from datetime import datetime, timedelta, timezone
 import hmac
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Literal
+from typing import Optional, List, Dict, Any, Literal, Annotated
 
 import httpx
 import jwt
 from passlib.hash import bcrypt
 from dotenv import load_dotenv
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Header, status
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Header, status, Request, Body
 from fastapi.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo.errors import DuplicateKeyError
@@ -2419,6 +2419,16 @@ async def public_hub(slug: str):
         [("sort_order", 1), ("created_at", 1)]
     )
     items = [_strip_item(it) async for it in items_cursor]
+    # Track an aggregated view counter (per-hub, not per-item).
+    try:
+        await db.hub_views.update_one(
+            {"slug": slug},
+            {"$inc": {"views": 1}, "$set": {"last_view_at": _now()}},
+            upsert=True,
+        )
+    except Exception:
+        pass
+    owner_features = get_features(user)
     return {
         "slug": slug,
         "company": {
@@ -2432,6 +2442,265 @@ async def public_hub(slug: str):
             "synthesis_positioning": ((bp.get("synthesis") or {}) or {}).get("positioning"),
         },
         "items": items,
+        # Public chat is only available for paying plans (Pro+).
+        "chat_enabled": bool(owner_features["features"].get("hub_chat_public")),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Hub Phase 2 — Public conversational AI chat + lead capture
+# ---------------------------------------------------------------------------
+class PublicHubChatIn(BaseModel):
+    session_id: Optional[str] = None
+    message: str = Field(min_length=1, max_length=2000)
+    visitor_lang: Optional[str] = None  # auto-detected by Hub host or set by visitor
+
+
+def _hub_chat_system_prompt(owner: Dict[str, Any], items: list, lang: str = "fr") -> str:
+    bp = owner.get("business_profile") or {}
+    name = bp.get("business_name") or owner.get("name") or "Domaine"
+    products = [it for it in items if it.get("type") == "product"]
+    services = [it for it in items if it.get("type") == "service"]
+    countries = bp.get("target_countries") or []
+    region = bp.get("region") or ""
+    bt = bp.get("business_type") or ""
+    synth = (bp.get("synthesis") or {})
+    product_lines = [
+        f"- {p['name']}"
+        + (f" ({p.get('category')})" if p.get("category") else "")
+        + (f" — {p.get('price')}€" if p.get("price") else "")
+        + (f". {p.get('description')[:200]}" if p.get("description") else "")
+        for p in products[:40]
+    ]
+    service_lines = [
+        f"- {s['name']}" + (f" — {s.get('description', '')[:160]}" if s.get("description") else "")
+        for s in services[:20]
+    ]
+    return f"""You are the official AI assistant of "{name}", a wine & spirits {bt}.
+
+LANGUAGE: ALWAYS reply in {lang}. If the visitor switches language, follow them.
+
+ABOUT THE BUSINESS:
+- Name: {name}
+- Region: {region or 'n/a'}
+- Markets: {', '.join(countries) if countries else 'n/a'}
+- Tagline: {synth.get('tagline') or 'n/a'}
+- Positioning: {synth.get('positioning') or 'n/a'}
+
+PRODUCTS ({len(products)}):
+{chr(10).join(product_lines) if product_lines else '(none yet)'}
+
+SERVICES ({len(services)}):
+{chr(10).join(service_lines) if service_lines else '(none yet)'}
+
+RULES:
+1. Answer ONLY based on the info above. If asked about prices not listed, say you don't have that info and offer to put the visitor in touch with the team.
+2. NEVER invent products, vintages, awards, or distributor info. If unsure, ask the visitor for clarification.
+3. NEVER reveal wholesale pricing, internal margins, or confidential business data.
+4. Be warm, expert, conversational. Use 1-3 short paragraphs max.
+5. After 2-3 substantive exchanges, NATURALLY propose to take their name + email so the team can follow up with a brochure or quote. Example: "Pour vous envoyer notre brochure complète, puis-je avoir votre prénom et email ?".
+6. Format: Plain text, no markdown headings (#), but you may use **bold** and bullet lists.
+"""
+
+
+@api.post("/public/hub/{slug}/chat")
+@limiter.limit("10/minute")
+async def public_hub_chat(request: Request, slug: str, payload: PublicHubChatIn):
+    """Anonymous conversational chat for a public Hub. Rate-limited per IP."""
+    owner = await db.users.find_one({"business_profile.hub_slug": slug})
+    if not owner:
+        raise HTTPException(404, "hub not found")
+    feats = get_features(owner)
+    if not feats["features"].get("hub_chat_public"):
+        raise HTTPException(402, "public chat requires a paid plan on the hub owner side")
+
+    # Items for context
+    items_cursor = db.hub_items.find({"user_id": owner["user_id"]}).sort([("sort_order", 1)])
+    items = [_strip_item(it) async for it in items_cursor]
+
+    lang = (payload.visitor_lang or (owner.get("business_profile") or {}).get("language") or "fr").lower()
+    if lang not in ("fr", "en", "pt", "es"):
+        lang = "fr"
+
+    # Get or create session
+    sid = payload.session_id or f"hubchat_{uuid.uuid4().hex[:14]}"
+    session = await db.hub_chat_sessions.find_one({"session_id": sid})
+    history: list = list((session or {}).get("messages") or [])
+
+    history.append({"role": "user", "content": payload.message, "ts": _now()})
+
+    system_prompt = _hub_chat_system_prompt(owner, items, lang=lang)
+    chat = LlmChat(
+        api_key=EMERGENT_LLM_KEY,
+        session_id=f"hub_{slug}_{sid}",
+        system_message=system_prompt,
+    ).with_model("openai", "gpt-4o-mini")
+
+    # Compact recent history (last 8 turns) for context
+    recent_user_msgs = [m["content"] for m in history if m["role"] == "user"][-8:]
+    blended = "\n\nPREVIOUS VISITOR MESSAGES:\n" + "\n".join(f"- {m}" for m in recent_user_msgs[:-1]) if len(recent_user_msgs) > 1 else ""
+    try:
+        reply = await chat.send_message(UserMessage(text=payload.message + blended))
+    except Exception as e:
+        logger.warning("hub chat LLM failure: %s", e)
+        raise HTTPException(503, "AI assistant temporarily unavailable")
+
+    history.append({"role": "assistant", "content": reply, "ts": _now()})
+
+    # Persist session (truncate to last 40 messages)
+    history = history[-40:]
+    client_ip = request.client.host if request.client else None
+    await db.hub_chat_sessions.update_one(
+        {"session_id": sid},
+        {
+            "$set": {
+                "session_id": sid,
+                "slug": slug,
+                "hub_owner_id": owner["user_id"],
+                "messages": history,
+                "language": lang,
+                "last_message_at": _now(),
+                "ip": client_ip,
+            },
+            "$setOnInsert": {"created_at": _now(), "lead_captured": False},
+        },
+        upsert=True,
+    )
+
+    return {
+        "session_id": sid,
+        "reply": reply,
+        "language": lang,
+        "user_message_count": sum(1 for m in history if m["role"] == "user"),
+    }
+
+
+class HubLeadIn(BaseModel):
+    session_id: str
+    name: Optional[str] = Field(default=None, max_length=200)
+    email: EmailStr
+    phone: Optional[str] = Field(default=None, max_length=40)
+    company: Optional[str] = Field(default=None, max_length=200)
+    consent: bool = True
+
+
+@api.post("/public/hub/{slug}/lead")
+@limiter.limit("5/minute")
+async def public_hub_lead(request: Request, slug: str, payload: HubLeadIn):
+    """Capture a lead from a public Hub visitor and create a prospect in the owner's CRM."""
+    owner = await db.users.find_one({"business_profile.hub_slug": slug})
+    if not owner:
+        raise HTTPException(404, "hub not found")
+    if not payload.consent:
+        raise HTTPException(400, "consent required (RGPD)")
+
+    sess = await db.hub_chat_sessions.find_one({"session_id": payload.session_id, "slug": slug})
+    transcript_excerpt = ""
+    if sess:
+        msgs = (sess.get("messages") or [])[-10:]
+        transcript_excerpt = "\n".join(
+            f"{m['role'].upper()}: {m.get('content', '')[:300]}"
+            for m in msgs
+            if isinstance(m, dict)
+        )
+
+    # Create prospect for the hub owner
+    prospect_id = f"pr_{uuid.uuid4().hex[:12]}"
+    await db.prospects.insert_one({
+        "id": prospect_id,
+        "user_id": owner["user_id"],
+        "name": payload.name or (payload.email.split("@")[0]),
+        "email": str(payload.email),
+        "phone": payload.phone,
+        "company": payload.company,
+        "source": "hub_public_chat",
+        "hub_slug": slug,
+        "tags": ["hub-lead"],
+        "notes": f"Lead via Hub public chat ({slug}). Session {payload.session_id}.\n\nTranscript:\n{transcript_excerpt[:2000]}",
+        "status": "new",
+        "created_at": _now(),
+        "updated_at": _now(),
+    })
+
+    # Update session
+    if sess:
+        await db.hub_chat_sessions.update_one(
+            {"session_id": payload.session_id},
+            {"$set": {
+                "lead_captured": True,
+                "lead_email": str(payload.email),
+                "lead_name": payload.name,
+                "lead_captured_at": _now(),
+                "prospect_id": prospect_id,
+            }},
+        )
+
+    # Fire-and-forget Resend email to the hub owner (best-effort)
+    try:
+        if RESEND_API_KEY:
+            import requests as _rq
+            bp = owner.get("business_profile") or {}
+            hub_name = bp.get("business_name") or owner.get("name") or "votre Hub"
+            html = f"""<h2>🎉 Nouveau lead via {hub_name}</h2>
+<p><b>Nom:</b> {payload.name or '—'}<br>
+<b>Email:</b> {payload.email}<br>
+<b>Téléphone:</b> {payload.phone or '—'}<br>
+<b>Entreprise:</b> {payload.company or '—'}</p>
+<p>Le contact est désormais visible dans votre CRM Pilot (source: hub_public_chat).</p>
+<p style="font-size:12px;color:#888">Conversation:</p>
+<pre style="background:#f5f5f5;padding:12px;border-radius:6px;font-size:11px">{transcript_excerpt[:3000]}</pre>"""
+            _rq.post(
+                "https://api.resend.com/emails",
+                headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
+                json={
+                    "from": f"{RESEND_FROM_NAME} <{RESEND_FROM_EMAIL}>",
+                    "to": [owner.get("email")],
+                    "subject": f"🆕 Nouveau lead via {hub_name}",
+                    "html": html,
+                },
+                timeout=8,
+            )
+    except Exception as e:
+        logger.warning("hub lead email send failed: %s", e)
+
+    return {"ok": True, "prospect_id": prospect_id}
+
+
+# ---------------------------------------------------------------------------
+# Phase D — Enrichment endpoint (OpenFoodFacts EAN lookup, for the Hub products)
+# ---------------------------------------------------------------------------
+@api.get("/enrich/ean/{ean}")
+async def enrich_by_ean(ean: str, user=Depends(get_current_user)):
+    """Lookup a product by EAN/barcode via the free Open Food Facts API.
+
+    Works well for spirits and most retail wines. Returns a normalised dict the
+    frontend can use to auto-fill a Hub product form.
+    """
+    ean = "".join(c for c in ean if c.isdigit())
+    if len(ean) < 8 or len(ean) > 14:
+        raise HTTPException(400, "EAN must be 8-14 digits")
+    import requests as _rq
+    try:
+        r = _rq.get(f"https://world.openfoodfacts.org/api/v2/product/{ean}.json", timeout=10)
+    except Exception as e:
+        raise HTTPException(503, f"OpenFoodFacts unreachable: {e}")
+    if r.status_code != 200:
+        raise HTTPException(404, "EAN not found")
+    body = r.json() or {}
+    if body.get("status") != 1 or not body.get("product"):
+        raise HTTPException(404, "EAN not found")
+    p = body["product"]
+    return {
+        "found": True,
+        "ean": ean,
+        "name": p.get("product_name") or p.get("product_name_fr") or p.get("product_name_en"),
+        "brand": (p.get("brands") or "").split(",")[0].strip() or None,
+        "category": (p.get("categories") or "").split(",")[-1].strip() or None,
+        "ingredients": p.get("ingredients_text_fr") or p.get("ingredients_text"),
+        "abv": p.get("alcohol_value"),  # may be present for spirits
+        "country": (p.get("countries") or "").split(",")[0].strip() or None,
+        "image_url": p.get("image_front_url") or p.get("image_url"),
+        "raw_url": f"https://world.openfoodfacts.org/product/{ean}",
     }
 
 

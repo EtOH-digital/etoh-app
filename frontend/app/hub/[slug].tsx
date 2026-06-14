@@ -13,6 +13,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 
 import { Colors, Spacing, Radii, Fonts } from "@/src/theme";
+import HubPublicChat from "@/src/components/HubPublicChat";
 
 type Item = {
   id: string;
@@ -38,6 +39,7 @@ type HubData = {
     synthesis_positioning?: string | null;
   };
   items: Item[];
+  chat_enabled?: boolean;
 };
 
 const API_BASE =
@@ -165,6 +167,15 @@ export default function PublicHubPage() {
             <Text style={s.ctaText}>Nous contacter</Text>
           </TouchableOpacity>
         </View>
+
+        {/* Public AI Chat — only when the Hub owner is on a paid plan */}
+        {data.chat_enabled ? (
+          <HubPublicChat
+            slug={data.slug}
+            hubName={c.name}
+            language={c.language || "fr"}
+          />
+        ) : null}
 
         <View style={s.footer}>
           <Text style={s.footerText}>Propulsé par EtOH</Text>

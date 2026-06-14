@@ -183,6 +183,30 @@ frontend:
         agent: "main"
         comment: "Created /subscription with 4 plan cards (Free / Pro 19€ POPULAIRE / Business 49€ / Premium 99€). Pulls /api/subscription/plans + /api/subscription/me, shows 'VOTRE PLAN' badge on current plan, 'S'abonner' button → POST /subscription/checkout → window.location.href (web) or WebBrowser.openBrowserAsync (native). Current paid plan shows 'Gérer mon abonnement' → Stripe Billing Portal. Made the credit chip on home tab clickable to go to /subscription. Success page /subscription/success acknowledges Stripe redirect with session_id, auto-redirects to home after 6s. Screenshot confirmed: 4 cards render, 3 Subscribe buttons visible."
 
+  - task: "Hub Phase 2 — Public conversational AI chat + lead capture + EAN enrichment (Phase C + D)"
+    implemented: true
+    working: true
+    file: "backend/server.py, frontend/src/components/HubPublicChat.tsx, frontend/app/hub/[slug].tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "Added POST /api/public/hub/{slug}/chat (anonymous, rate-limited 10/min per IP via slowapi). Uses LlmChat with a Hub-specific system prompt that injects company info + products + services + tagline + positioning. Persists conversation in hub_chat_sessions (40 messages max). Returns session_id + reply + user_message_count. Auto-language detection. Feature-gated: requires hub owner on Pro+ plan (402 otherwise). Added POST /api/public/hub/{slug}/lead capturing visitor email/name/phone with RGPD consent → creates a prospect in the owner CRM (collection prospects, source='hub_public_chat'), updates session with lead_captured=true, and sends Resend email notification to the hub owner with the conversation transcript. Public hub endpoint now also tracks views in hub_views collection. Added GET /api/enrich/ean/{ean} (auth required) using OpenFoodFacts public API to enrich Hub products (name, brand, category, ABV, country, image). Frontend: created HubPublicChat component with chat bubbles + inline lead capture form (name/email/phone/company + RGPD checkbox) shown after 2 user messages. Integrated into /hub/[slug] page; only renders when chat_enabled=true (Pro+ hub owner)."
+
+  - task: "Phase D — CRM Deep Links (mailto / wa.me / LinkedIn) on prospect cards"
+    implemented: true
+    working: true
+    file: "frontend/app/(tabs)/pilot.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "Added a 'Ouvrir directement :' row below the AI-drafted action buttons on every prospect card. Three circular icon buttons: mailto:target.email, wa.me/{cleaned-phone}, and LinkedIn (uses target.linkedin_url if present, otherwise builds a LinkedIn people search URL with contact_name + company name as keywords). Disabled state with low opacity when the corresponding field is missing. Renamed the existing AI buttons to 'Email IA / WhatsApp IA / LinkedIn IA' with a sparkles icon to clearly differentiate. Linking is already imported in pilot.tsx so no new deps."
+
 agent_communication:
   - agent: "main"
-    message: "Phase A done: Stripe subscriptions (4-tier) + admin API (X-Admin-Key) + frontend subscription page. All 4 tiers visible and styled. Ready for testing_agent to validate: 1) subscription checkout creates a proper Stripe subscription Checkout Session URL (mode=subscription), 2) webhook handles customer.subscription.created/.updated/.deleted with correct plan mapping from price_id, 3) invoice.paid renews credits idempotently via stripe_invoices._id, 4) /api/admin/* endpoints require X-Admin-Key and reject without/wrong key, 5) /api/admin/metrics/summary returns proper aggregates, 6) /api/admin/users/{user_id}/credits grants credits and logs to wallet_events, 7) backward compat — credit pack checkout still works, 8) all previous endpoints (auth, coach, studio, pilot, hub, crm) still return 200."
+    message: "Phases C & D delivered. Phase C: public Hub chat with feature gating (Pro+) + lead capture creating prospects + Resend email notifications. Phase D: CRM deep links on prospect cards (mailto/wa.me/LinkedIn) + EAN enrichment endpoint via OpenFoodFacts. Skipped Phase 2 (RAG) by user choice. Skipped server.py refactor (3rd time flagged but user prefers feature work). Need testing_agent to validate: 1) POST /api/public/hub/{slug}/chat returns 402 when owner is on free plan, 200 when Pro+ (use admin API to upgrade test user to Pro: PATCH user subscription manually OR have testing_agent set user.subscription={plan_id:'pro', status:'active'} via Mongo before the test); 2) chat with valid Pro owner: send 3 messages, verify reply contains product references from the Hub, verify user_message_count increments correctly; 3) lead endpoint creates prospect row in prospects collection with source='hub_public_chat' and hub_slug field; 4) rate limit 10/min triggers 429 after 10 hits; 5) GET /api/enrich/ean/3017620422003 (Nutella — known to exist) returns 200 with name/brand; invalid EAN '12' returns 400; non-existent EAN returns 404; 6) regression: all previous endpoints still work."

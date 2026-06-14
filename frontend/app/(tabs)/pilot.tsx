@@ -396,6 +396,25 @@ function TargetsList({
   targets: Target[];
   onOpenAction: (t: Target, c: Channel) => void;
 }) {
+  // Direct deep-link openers (no AI draft) — for users who just want to reach out fast.
+  const openDirect = (t: Target, c: Channel) => {
+    try {
+      if (c === "email" && t.email) {
+        Linking.openURL(`mailto:${t.email}`);
+      } else if (c === "whatsapp" && t.phone) {
+        const phone = (t.phone || "").replace(/[^0-9+]/g, "").replace(/^\+/, "");
+        Linking.openURL(`https://wa.me/${phone}`);
+      } else if (c === "linkedin") {
+        const url =
+          t.linkedin_url && t.linkedin_url.length > 5
+            ? t.linkedin_url
+            : `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(
+                `${t.contact_name || ""} ${t.name}`.trim(),
+              )}`;
+        Linking.openURL(url);
+      }
+    } catch {}
+  };
   return (
     <View style={list.wrap}>
       {targets.map((t) => (
@@ -426,6 +445,7 @@ function TargetsList({
               ))}
             </View>
           )}
+          {/* AI-drafted actions (opens modal with editable draft) */}
           <View style={list.actions}>
             <TouchableOpacity
               testID={`pilot-act-email-${t.id}`}
@@ -433,8 +453,9 @@ function TargetsList({
               onPress={() => onOpenAction(t, "email")}
               activeOpacity={0.85}
             >
+              <Ionicons name="sparkles-outline" size={12} color="#fff" />
               <Ionicons name="mail-outline" size={14} color="#fff" />
-              <Text style={list.actText}>Email</Text>
+              <Text style={list.actText}>Email IA</Text>
             </TouchableOpacity>
             <TouchableOpacity
               testID={`pilot-act-whatsapp-${t.id}`}
@@ -442,8 +463,9 @@ function TargetsList({
               onPress={() => onOpenAction(t, "whatsapp")}
               activeOpacity={0.85}
             >
+              <Ionicons name="sparkles-outline" size={12} color="#fff" />
               <Ionicons name="logo-whatsapp" size={14} color="#fff" />
-              <Text style={list.actText}>WhatsApp</Text>
+              <Text style={list.actText}>WhatsApp IA</Text>
             </TouchableOpacity>
             <TouchableOpacity
               testID={`pilot-act-linkedin-${t.id}`}
@@ -451,8 +473,40 @@ function TargetsList({
               onPress={() => onOpenAction(t, "linkedin")}
               activeOpacity={0.85}
             >
+              <Ionicons name="sparkles-outline" size={12} color="#fff" />
               <Ionicons name="logo-linkedin" size={14} color="#fff" />
-              <Text style={list.actText}>LinkedIn</Text>
+              <Text style={list.actText}>LinkedIn IA</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Quick deep-link openers — bypass AI, open external app directly */}
+          <View style={list.quickRow}>
+            <Text style={list.quickLabel}>Ouvrir directement :</Text>
+            <TouchableOpacity
+              testID={`pilot-quick-email-${t.id}`}
+              style={[list.quickBtn, !t.email ? { opacity: 0.35 } : null]}
+              onPress={() => openDirect(t, "email")}
+              disabled={!t.email}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="mail-outline" size={16} color={Colors.pilot} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              testID={`pilot-quick-whatsapp-${t.id}`}
+              style={[list.quickBtn, !t.phone ? { opacity: 0.35 } : null]}
+              onPress={() => openDirect(t, "whatsapp")}
+              disabled={!t.phone}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="logo-whatsapp" size={16} color="#25D366" />
+            </TouchableOpacity>
+            <TouchableOpacity
+              testID={`pilot-quick-linkedin-${t.id}`}
+              style={list.quickBtn}
+              onPress={() => openDirect(t, "linkedin")}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="logo-linkedin" size={16} color="#0A66C2" />
             </TouchableOpacity>
           </View>
         </View>
@@ -502,6 +556,29 @@ const list = StyleSheet.create({
     borderRadius: Radii.md,
   },
   actText: { color: "#fff", fontSize: 12, fontFamily: Fonts.bodyMedium, fontWeight: "700" },
+  quickRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+  },
+  quickLabel: {
+    fontFamily: Fonts.body,
+    fontSize: 11,
+    color: Colors.textMuted,
+    marginRight: 4,
+  },
+  quickBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: Colors.bgTertiary,
+    alignItems: "center",
+    justifyContent: "center",
+  },
 });
 
 const mod = StyleSheet.create({
