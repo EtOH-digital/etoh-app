@@ -219,18 +219,18 @@ frontend:
         agent: "main"
         comment: "Phase 1 refactor (safe + foundational). Created: core/db.py (mongo_client+db+_now), core/security.py (get_current_user + create_jwt + hash/verify_password — passlib bcrypt), core/rate_limit.py (llm_rate_limit per-user + _ip_rate_limit_check per-IP with X-Forwarded-For), and routes/admin.py (admin router with X-Admin-Key dep + /admin/health + /admin/metrics/summary + /admin/users/{uid}/credits). server.py now imports from these modules and includes admin_router; old inline definitions removed. server.py shrunk from 3306 → 3115 lines (-191). All endpoints still 200: /api/, /api/auth/me, /api/admin/health (with key), /api/subscription/plans, /api/hub/me, /api/admin/metrics/summary (returns proper JSON). Bcrypt warning is cosmetic (passlib 1.7.4 vs bcrypt 5.x — non-blocking, password hash still works). NEXT (refactor phase 2 — deferred): extract routes/subscription.py, routes/public_hub.py, routes/enrich.py, routes/wallet.py, routes/auth.py from server.py."
 
-  - task: "Phase 2 — RAG / Embeddings (PDF/DOCX/URL ingestion + cosine similarity)"
-    implemented: false
-    working: false
-    file: "backend/routes/rag.py (planned)"
+  - task: "Phase 2 — RAG / Embeddings (PDF/DOCX/URL/text + sentence-transformers + cosine)"
+    implemented: true
+    working: true
+    file: "backend/core/rag.py, backend/routes/rag.py, backend/server.py (coach RAG augmentation)"
     stuck_count: 0
     priority: "high"
-    needs_retesting: false
+    needs_retesting: true
     status_history:
-      - working: false
+      - working: true
         agent: "main"
-        comment: "NOT YET STARTED — next task in queue."
+        comment: "Full RAG pipeline shipped: core/rag.py wraps sentence-transformers paraphrase-multilingual-MiniLM-L12-v2 (384 dims, multilingual FR/EN/ES/IT/DE/PT), pypdf for PDFs, python-docx for DOCX, BeautifulSoup for URLs. Recursive char-based chunker (800 chars, 100 overlap). Cosine similarity search in pure numpy. Endpoints: POST /api/rag/documents (multipart PDF/DOCX), POST /api/rag/documents/url, POST /api/rag/documents/text, GET /api/rag/documents, DELETE /api/rag/documents/{doc_id}, POST /api/rag/search. Admin endpoints under /api/admin/rag/* (X-Admin-Key) with scope='global' to share knowledge with ALL users (system-wide knowledge base). Feature-gated: requires user.subscription with features.rag=true (Pro+). Quota: rag_max_docs from plan (Pro=5, Business/Premium=unlimited). Integrated into /api/coach/message: before each reply, retrieve top-4 chunks for the user query and inject them into the prompt — verified working: asked 'Sur quels marchés prospecter ?' after uploading a Domaine de Cascade plaquette, the Coach reply mentioned the actual products/region from the doc. Note: heavy deps (torch CPU + sentence-transformers) installed via --no-cache-dir from pytorch.org/whl/cpu to avoid CUDA bloat. Model loads lazily (~3s warm-up on first request, ~80 MB RAM)."
 
 agent_communication:
   - agent: "main"
-    message: "Phase 1 refactor done & validated. Core modules + admin router extracted. server.py -191 lines. Pattern validated, more routes to extract in next iteration (subscription, public_hub, enrich, etc.) — deferred to avoid context overrun. Moving to RAG ingestion next as per user roadmap."
+    message: "Phase 1 refactor done & Phase 2 RAG shipped. core/ now has 7 modules (db, security, rate_limit, sentry_init, subscriptions, rag, __init__). routes/ has 2 routers (admin, rag). RAG integrated into Coach for automatic retrieval-augmented replies. Phase 3 (Hub EAN UI button) and Phase 4 (Pricing engine) deferred to next session — backend foundation in place. For testing_agent: 1) RAG ingestion + search end-to-end with PDF + URL + text (promote user to Pro temporarily); 2) RAG admin endpoints with X-Admin-Key; 3) Coach replies should include excerpts from uploaded docs when relevant; 4) feature gating (free → 402); 5) regression on all existing endpoints (auth, hub, pilot, subscription, admin, public hub chat)."

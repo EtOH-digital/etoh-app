@@ -752,6 +752,11 @@ async def get_my_features(user=Depends(get_current_user)):
 from routes.admin import router as admin_router  # noqa: E402
 app.include_router(admin_router)
 
+# RAG (Retrieval-Augmented Generation) — uploads/search backed by sentence-transformers
+from routes.rag import router as rag_router, admin_router as rag_admin_router  # noqa: E402
+app.include_router(rag_router)
+app.include_router(rag_admin_router)
+
 
 # ---------- Auth ----------
 @api.post("/auth/signup", response_model=TokenOut)
@@ -1000,7 +1005,20 @@ async def coach_message(payload: CoachMessageIn,
 
     # New chat instance without replay (simpler, deterministic)
     chat = _make_chat(session_id=session_id, system_message=_coach_system(payload.language))
-    full_user_text = (history_text + payload.message) if history_text else payload.message
+
+    # ---- RAG augmentation: retrieve user docs (if any) related to the question ----
+    rag_block = ""
+    try:
+        from core.rag import search_chunks as _rag_search, build_rag_context as _rag_ctx
+        feats = get_features(current_user)
+        if feats["features"].get("rag"):
+            hits = await _rag_search(db, current_user["user_id"], payload.message, top_k=4)
+            if hits:
+                rag_block = "\n\n" + _rag_ctx(hits, max_chars=3000) + "\n\nUtilise ces extraits comme source de vérité quand ils sont pertinents.\n"
+    except Exception as _e:
+        logger.warning("RAG augmentation failed (non-blocking): %s", _e)
+
+    full_user_text = (history_text + payload.message + rag_block) if (history_text or rag_block) else payload.message
     reply = await chat.send_message(UserMessage(text=full_user_text))
 
     # Persist

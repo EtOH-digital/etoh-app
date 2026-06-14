@@ -1,0 +1,56 @@
+{
+  "summary": "Iteration 7 — Phase 1 refactor + Phase 2 RAG end-to-end backend tests. RESULT: 23/24 (95.8%) for the new RAG suite; 100/102 (98.0%) full regression. The core/ + admin router extraction is transparent (all regression endpoints still 200). RAG pipeline is fully functional: text/DOCX/URL ingest, listing, deletion, quota (rag_max_docs=5 → 402 on 6th), free-plan gating (402 'RAG indisponible'), admin X-Admin-Key endpoints, global-scope docs visible to regular users, and Coach RAG-context injection (LLM reply correctly cites injected USA/Japon/Suisse/Demeter terms). ONE minor ranking observation: POST /api/rag/search {query:'marchés export', top_k:3} returns the Wikipedia 'Wine' page's 'Export market share' chunks higher than the small Cascade plaquette chunk (which contains 'USA/Japon/Suisse') — the multilingual MiniLM ranks the longer, repeatedly-export-mentioning Wiki chunks above the single 290-char Cascade chunk. The Coach uses top_k=4 and DOES surface the Cascade chunk (verified by reply content), so the end-user RAG flow works; this is purely a ranking quirk of co-ingesting a very large doc with a tiny one. Two unrelated regression failures: (a) test_signup_new flaked once on Cloudflare 502 (passes on retry — transient ingress hiccup); (b) test_pilot_v2 has a pre-existing intra-class state dependency (TestPilotSearch._search_id) — not caused by this iteration. Mongo cleanly reverted: 0 user docs / 0 global docs / 0 chunks; test user back to plan_id=free.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "POST /api/rag/search",
+        "issue": "Multilingual MiniLM ranks long Wikipedia 'Wine' chunks (mentioning 'Exports/Export market share') above the small Cascade plaquette chunk for query 'marchés export' when top_k=3. Cascade chunk surfaces at top_k>=4 (Coach pathway confirms this). Consider per-doc score normalization or boosting recently-ingested user docs vs global/large docs."
+      },
+      {
+        "endpoint": "Coach RAG injection (server.py ~lines 1010-1020)",
+        "issue": "Hardcoded top_k=4 and max_chars=3000 in coach RAG injection. Works well today but should be plan-aware (e.g. higher top_k for Business/Enterprise) once those plans differentiate."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_rag_phase2.py",
+    "/app/test_reports/pytest/iteration_7_rag_results.xml",
+    "/app/test_reports/pytest/iteration_7_full_results.xml"
+  ],
+  "action_items": [
+    "[OPTIONAL] Loosen RAG search test (or main agent: consider per-doc score normalization) so a small user doc isn't drowned by a co-ingested encyclopedia page. Coach already works because top_k=4 lets the Cascade chunk in.",
+    "[PRE-EXISTING] test_pilot_v2.TestSendEmailAndCredits.test_send_email_deducts_one_credit_mocked uses TestPilotSearch._search_id which requires the search test to run first (intra-class state). Add a fixture to seed _search_id or restructure with module-level state. NOT caused by this iteration's refactor.",
+    "[FRONTEND TODO] No frontend exposure of /api/rag/* yet — Hub UI needs a 'Base de connaissances' upload/list/delete screen (Pro-gated) for users to actually feed their RAG."
+  ],
+  "critical_code_review_comments": [
+    "core/rag.py:31-38 — Model loading is lazy and globally cached; first /api/rag/* request observed ~3s cold start (backend log confirmed: 'Embedding model loaded (dims=384)'). Subsequent calls reuse the in-process singleton. OK for --workers 1; if scaling workers, each forks its own copy (~80MB each).",
+    "core/rag.py:142-179 search_chunks does a FULL collection scan and Python-side dot product. Acceptable up to ~10K chunks/user but the log already shows insert_many can write 50+ chunks per Wikipedia page — Cascade-style accounts could hit 5×100 = 500 chunks fast. Plan the Mongo Atlas Vector Search migration before any single user exceeds ~5K chunks.",
+    "routes/rag.py:223 — DELETE /api/rag/documents/{doc_id} silently 404s if the doc belongs to another user or is scope=global. Good (no cross-tenant leak), but consider returning 403 instead of 404 when the doc exists but is global so the user knows it's not theirs to delete.",
+    "routes/rag.py:277 — `user_id=None if scope == 'global' else None` is a tautology (always None). Looks like a leftover from refactoring out a `user_id` form field; either restore the form field for admin-uploaded-to-user docs, or drop the conditional.",
+    "routes/rag.py:138-175 — `ingest_document` (multipart) is fine, but it would be cleaner to consolidate the 3 ingest endpoints (file / url / text) through a single _store_document call site with a small dispatcher; today the quota + feature checks are duplicated three times.",
+    "core/rag.py:69-82 — extract_text_from_url uses a generic User-Agent 'etoh-rag/1.0'. Some sites (Wikipedia worked fine in tests) may 403 on cloud IP ranges. Consider falling back to readability-lxml or trafilatura if BeautifulSoup yields <500 chars.",
+    "server.py:756-758 — Two routers registered (rag_router + rag_admin_router). Good clean separation; just keep an eye on server.py line count (already 3300+ as flagged in iteration_6) — Phase 3 should extract /api/coach/* and /api/public/hub/* into their own routers next."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_rag_phase2.py (new — 24 tests covering regression + Phase 2 RAG end-to-end + cleanup)",
+    "/app/test_reports/pytest/iteration_7_rag_results.xml",
+    "/app/test_reports/pytest/iteration_7_full_results.xml",
+    "/app/test_reports/iteration_7.json"
+  ],
+  "success_rate": {
+    "backend": "RAG suite 23/24 (95.8%), full regression 100/102 (98.0%, 2 pre-existing/transient non-RAG)",
+    "frontend": "not tested (backend-only request)"
+  },
+  "seed_data_creation": "Promoted vigneron@etoh-test.com to {plan_id:'pro', status:'active'} inside autouse module fixture (snapshotted original = {plan_id:'free', status:None}). At teardown: restored original sub, deleted ALL doc_ids created by the run (user + admin) from both rag_documents and rag_chunks, plus belt-and-suspenders sweep of any leftover rag_documents owned by this user or with TEST_ prefix. Verified post-run: 0 user docs, 0 global docs, 0 chunks, user back to free.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "RAG model load is ~3s on first call after backend restart — bump any first-RAG-test timeout to >=60s. The MongoDB chunks collection stores embeddings inline (list of 384 floats); make sure to project out 'embedding' if you ever serialize the full collection. ETOH_ADMIN_API_KEY is in /app/backend/.env (loaded by routes/admin.py at module import). When demoting the test user back to free, do NOT $unset subscription if you previously snapshotted a real sub — restore it explicitly (see fixture pattern in test_rag_phase2.py). The pre-existing test_pilot_v2 intra-class state bug will surface whenever pytest runs only its second test alone — main agent may want to fix at refactoring time.",
+  "rca_of_issue": "test_search_returns_relevant_chunks 'failed' because the Wikipedia 'Wine' page (ingested 1 step before the search test) generated dozens of chunks containing strong 'Exports/Export market share' semantics that the multilingual MiniLM ranked above the single 290-char Cascade chunk (which contains 'Distribution: CHR Sud-Est, USA, Japon, Suisse') for the FR query 'marchés export'. This is NOT a bug in the RAG plumbing — embeddings, cosine similarity, chunk persistence, and retrieval all behave correctly. It IS a UX/quality observation: when a user co-ingests a long generic doc with a short specific one, the long doc can swamp top-k=3 results. Mitigation options: (a) per-doc score boost decaying with chunk count, (b) MMR (max marginal relevance) re-ranking, (c) raise default top_k from 3 to 5 in the user-facing search endpoint, (d) doc-level filter ('search only in these docs'). The Coach pathway uses top_k=4 and already pulls the Cascade chunk into the prompt — verified by the coach reply containing RAG-derived keywords."
+}

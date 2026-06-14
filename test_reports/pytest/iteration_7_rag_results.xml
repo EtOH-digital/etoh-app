@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="24" time="53.412" timestamp="2026-06-14T22:00:40.306077+00:00" hostname="agent-env-4b7b624a-ac36-4b06-a2fb-3ec5e82f495a"><testcase classname="tests.test_rag_phase2.TestARegression" name="test_root" time="0.925" /><testcase classname="tests.test_rag_phase2.TestARegression" name="test_auth_me" time="0.523" /><testcase classname="tests.test_rag_phase2.TestARegression" name="test_admin_health" time="0.099" /><testcase classname="tests.test_rag_phase2.TestARegression" name="test_admin_health_no_key" time="0.130" /><testcase classname="tests.test_rag_phase2.TestARegression" name="test_admin_metrics_summary" time="0.150" /><testcase classname="tests.test_rag_phase2.TestARegression" name="test_subscription_plans" time="0.153" /><testcase classname="tests.test_rag_phase2.TestARegression" name="test_hub_me" time="0.111" /><testcase classname="tests.test_rag_phase2.TestARegression" name="test_public_hub_domaine_test" time="0.100" /><testcase classname="tests.test_rag_phase2.TestARegression" name="test_wallet_packs" time="0.101" /><testcase classname="tests.test_rag_phase2.TestARegression" name="test_enrich_ean" time="0.715" /><testcase classname="tests.test_rag_phase2.TestBRagFreePlanGating" name="test_rag_text_blocked_for_free_plan" time="0.137" /><testcase classname="tests.test_rag_phase2.TestCRagProFlow" name="test_ingest_text" time="10.053" /><testcase classname="tests.test_rag_phase2.TestCRagProFlow" name="test_ingest_docx" time="0.764" /><testcase classname="tests.test_rag_phase2.TestCRagProFlow" name="test_ingest_url" time="14.752" /><testcase classname="tests.test_rag_phase2.TestCRagProFlow" name="test_list_documents_contains_all" time="0.159" /><testcase classname="tests.test_rag_phase2.TestCRagProFlow" name="test_search_returns_relevant_chunks" time="0.140"><failure message="AssertionError: none of USA/Japon/Suisse found in top results: cing countries&#10;  [&#10;  edit&#10;  ]&#10;  &#10;  See also: &#10;  List of wine-producing regions&#10;  &#10;  2023 wine production estimates&#10;  &#10;  Rank&#10;  &#10;  Country&#10;  &#10;  Production&#10;  (million hecolitres)&#10;  [&#10;  47&#10;  ]&#10;  &#10;  Production&#10;  (% of world)&#10;  [&#10;  47&#10;  ]&#10;  &#10;  Exports &#10;  (million hecolitres)&#10;  [&#10;  48&#10;  ]&#10;  &#10;  Export market share &#10;  (% of value in US$)&#10;  [&#10;  49&#10;  ]&#10;  &#10;  1&#10;  &#10;   &#10;  France&#10;  &#10;  48.0&#10;  &#10;  20.2%&#10;  &#10;  &#10;assert False&#10; +  where False = any(&lt;generator object TestCRagProFlow.test_search_returns_relevant_chunks.&lt;locals&gt;.&lt;genexpr&gt; at 0xfb5ed1746ce0&gt;)">tests/test_rag_phase2.py:282: in test_search_returns_relevant_chunks
+    assert any(kw in all_text for kw in ("USA", "Japon", "Suisse")), \
+E   AssertionError: none of USA/Japon/Suisse found in top results: cing countries
+E     [
+E     edit
+E     ]
+E     
+E     See also: 
+E     List of wine-producing regions
+E     
+E     2023 wine production estimates
+E     
+E     Rank
+E     
+E     Country
+E     
+E     Production
+E     (million hecolitres)
+E     [
+E     47
+E     ]
+E     
+E     Production
+E     (% of world)
+E     [
+E     47
+E     ]
+E     
+E     Exports 
+E     (million hecolitres)
+E     [
+E     48
+E     ]
+E     
+E     Export market share 
+E     (% of value in US$)
+E     [
+E     49
+E     ]
+E     
+E     1
+E     
+E      
+E     France
+E     
+E     48.0
+E     
+E     20.2%
+E     
+E     
+E   assert False
+E    +  where False = any(&lt;generator object TestCRagProFlow.test_search_returns_relevant_chunks.&lt;locals&gt;.&lt;genexpr&gt; at 0xfb5ed1746ce0&gt;)</failure></testcase><testcase classname="tests.test_rag_phase2.TestCRagProFlow" name="test_coach_uses_rag_context" time="6.374" /><testcase classname="tests.test_rag_phase2.TestCRagProFlow" name="test_delete_document" time="0.271" /><testcase classname="tests.test_rag_phase2.TestDRagQuota" name="test_quota_enforced" time="0.939" /><testcase classname="tests.test_rag_phase2.TestEAdminRag" name="test_admin_ingest_url_global" time="16.096" /><testcase classname="tests.test_rag_phase2.TestEAdminRag" name="test_admin_list_documents" time="0.159" /><testcase classname="tests.test_rag_phase2.TestEAdminRag" name="test_admin_no_key_blocked" time="0.204" /><testcase classname="tests.test_rag_phase2.TestEAdminRag" name="test_global_doc_visible_to_user" time="0.112" /><testcase classname="tests.test_rag_phase2.TestEAdminRag" name="test_admin_delete_document" time="0.117" /></testsuite></testsuites>
