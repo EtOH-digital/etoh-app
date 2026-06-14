@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   RefreshControl,
   Image,
+  Pressable,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
@@ -83,10 +84,14 @@ export default function Home() {
         <View style={s.header}>
           <View style={s.headerRow}>
             <Image source={require("../../assets/brand/etoh.png")} style={{ width: 70, height: 50 }} resizeMode="contain" />
-            <View style={s.creditChip} testID="home-credits">
+            <Pressable
+              onPress={() => router.push("/subscription")}
+              style={s.creditChip}
+              testID="home-credits"
+            >
               <Ionicons name="flash" size={11} color={Colors.brandPrimary} />
               <Text style={s.creditChipText}>{user?.credits ?? 0} crédits</Text>
-            </View>
+            </Pressable>
           </View>
           <Text style={s.greeting}>Bonjour{firstName ? `, ${firstName}` : ""}</Text>
           <Text style={s.tagline}>Vendez plus, vendez mieux.</Text>

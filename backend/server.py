@@ -16,6 +16,7 @@ import os
 import uuid
 import logging
 from datetime import datetime, timedelta, timezone
+import hmac
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Literal
 
@@ -517,7 +518,152 @@ async def stripe_webhook(request: Request):
                 }},
             )
 
+    elif etype in ("customer.subscription.created", "customer.subscription.updated"):
+        await _handle_subscription_upsert(data_obj)
+    elif etype == "customer.subscription.deleted":
+        await _handle_subscription_deleted(data_obj)
+    elif etype == "invoice.paid":
+        await _handle_invoice_paid(data_obj)
+
     return {"received": True}
+
+
+# ---------------------------------------------------------------------------
+# Subscription helpers (called from webhook + REST endpoints below)
+# ---------------------------------------------------------------------------
+from core.subscriptions import (  # noqa: E402
+    PLANS,
+    PLAN_BY_ID,
+    PLAN_FREE,
+    get_effective_plan,
+    get_features,
+    get_credits_for_plan,
+    get_stripe_price_id,
+)
+
+
+def _plan_id_from_price(price_id: Optional[str]) -> Optional[str]:
+    if not price_id:
+        return None
+    for plan in PLANS:
+        if get_stripe_price_id(plan["id"]) == price_id:
+            return plan["id"]
+    return None
+
+
+async def _handle_subscription_upsert(sub: Dict[str, Any]) -> None:
+    """Persist customer.subscription.created/.updated on the user record."""
+    if not isinstance(sub, dict):
+        return
+    customer_id = sub.get("customer")
+    sub_id = sub.get("id")
+    status_ = sub.get("status")
+    period_end_ts = sub.get("current_period_end")
+    current_period_end = (
+        datetime.fromtimestamp(period_end_ts, tz=timezone.utc) if period_end_ts else None
+    )
+    items = ((sub.get("items") or {}).get("data") or [])
+    price_id = items[0].get("price", {}).get("id") if items else None
+    plan_id = _plan_id_from_price(price_id)
+    if plan_id is None:
+        logger.warning("Subscription %s for customer %s uses unknown price_id=%s", sub_id, customer_id, price_id)
+        return
+
+    user_doc = await db.users.find_one({"subscription.stripe_customer_id": customer_id})
+    if not user_doc:
+        # Best-effort: try metadata fallback (Checkout sets app_user_id)
+        meta_uid = (sub.get("metadata") or {}).get("app_user_id")
+        if meta_uid:
+            user_doc = await db.users.find_one({"user_id": meta_uid})
+            if user_doc:
+                await db.users.update_one(
+                    {"user_id": meta_uid},
+                    {"$set": {"subscription.stripe_customer_id": customer_id}},
+                )
+    if not user_doc:
+        logger.warning("Subscription event with unknown customer_id=%s", customer_id)
+        return
+
+    await db.users.update_one(
+        {"user_id": user_doc["user_id"]},
+        {"$set": {
+            "subscription.plan_id": plan_id,
+            "subscription.stripe_customer_id": customer_id,
+            "subscription.stripe_subscription_id": sub_id,
+            "subscription.status": status_,
+            "subscription.current_period_end": current_period_end,
+            "subscription.cancel_at_period_end": bool(sub.get("cancel_at_period_end")),
+            "subscription.updated_at": _now(),
+        }},
+    )
+    logger.info("Subscription upsert: user=%s plan=%s status=%s", user_doc["user_id"], plan_id, status_)
+
+
+async def _handle_subscription_deleted(sub: Dict[str, Any]) -> None:
+    if not isinstance(sub, dict):
+        return
+    customer_id = sub.get("customer")
+    user_doc = await db.users.find_one({"subscription.stripe_customer_id": customer_id})
+    if not user_doc:
+        return
+    await db.users.update_one(
+        {"user_id": user_doc["user_id"]},
+        {"$set": {
+            "subscription.status": "canceled",
+            "subscription.plan_id": PLAN_FREE,
+            "subscription.cancel_at_period_end": False,
+            "subscription.updated_at": _now(),
+        }},
+    )
+    logger.info("Subscription canceled: user=%s", user_doc["user_id"])
+
+
+async def _handle_invoice_paid(invoice: Dict[str, Any]) -> None:
+    """Renew monthly credits idempotently via invoice.id."""
+    if not isinstance(invoice, dict):
+        return
+    invoice_id = invoice.get("id")
+    customer_id = invoice.get("customer")
+    billing_reason = invoice.get("billing_reason")
+
+    if not invoice_id:
+        return
+    # Idempotency on invoice id (separate from event id — Stripe may retry same invoice across events)
+    try:
+        await db.stripe_invoices.insert_one({
+            "_id": invoice_id,
+            "customer_id": customer_id,
+            "billing_reason": billing_reason,
+            "received_at": _now(),
+        })
+    except DuplicateKeyError:
+        return
+
+    # Only credit on subscription cycle / create — not on credit-pack invoices (which we already credit via session.completed)
+    if billing_reason not in ("subscription_cycle", "subscription_create", "subscription_update"):
+        return
+
+    user_doc = await db.users.find_one({"subscription.stripe_customer_id": customer_id})
+    if not user_doc:
+        return
+    plan_id = (user_doc.get("subscription") or {}).get("plan_id") or PLAN_FREE
+    credits_to_add = get_credits_for_plan(plan_id)
+    if credits_to_add <= 0:
+        return
+    await db.users.update_one(
+        {"user_id": user_doc["user_id"]},
+        {"$inc": {"credits": credits_to_add}},
+    )
+    await db.wallet_events.insert_one({
+        "id": f"sub_{uuid.uuid4().hex[:10]}",
+        "user_id": user_doc["user_id"],
+        "plan_id": plan_id,
+        "credits": credits_to_add,
+        "stripe_invoice_id": invoice_id,
+        "source": "subscription_renewal",
+        "created_at": _now(),
+    })
+    logger.info("Subscription invoice paid → +%d credits to user=%s", credits_to_add, user_doc["user_id"])
 
 
 @app.get("/api/debug/sentry")
@@ -534,6 +680,239 @@ async def debug_sentry():
     if env == "production" and not debug_on:
         raise HTTPException(status_code=404, detail="not found")
     raise RuntimeError("Sentry test exception — if you see this in Sentry, monitoring works ✅")
+
+
+# ---------------------------------------------------------------------------
+# Subscription endpoints
+# ---------------------------------------------------------------------------
+class SubscriptionCheckoutIn(BaseModel):
+    plan_id: str
+    success_url: str
+    cancel_url: str
+
+
+async def _get_or_create_stripe_customer(user: Dict[str, Any]) -> str:
+    sub = user.get("subscription") or {}
+    cid = sub.get("stripe_customer_id")
+    if cid:
+        try:
+            stripe.Customer.retrieve(cid)
+            return cid
+        except Exception:
+            pass  # stale id → recreate
+    customer = stripe.Customer.create(
+        email=user.get("email"),
+        name=user.get("name") or None,
+        metadata={"app_user_id": user["user_id"]},
+    )
+    await db.users.update_one(
+        {"user_id": user["user_id"]},
+        {"$set": {"subscription.stripe_customer_id": customer.id}},
+    )
+    return customer.id
+
+
+@api.get("/subscription/plans")
+async def list_subscription_plans():
+    """Public — return all subscription tiers with feature lines for the pricing page."""
+    out = []
+    for plan in PLANS:
+        out.append({
+            "id": plan["id"],
+            "name": plan["name"],
+            "tagline": plan["tagline"],
+            "price_eur": plan["price_eur"],
+            "credits_monthly": plan["credits_monthly"],
+            "features": plan["features"],
+            "feature_lines": plan["feature_lines"],
+            "stripe_configured": bool(get_stripe_price_id(plan["id"])) if plan["price_eur"] > 0 else True,
+        })
+    return {"plans": out}
+
+
+@api.get("/subscription/me")
+async def get_my_subscription(user=Depends(get_current_user)):
+    user_doc = await db.users.find_one({"user_id": user["user_id"]})
+    sub = (user_doc or {}).get("subscription") or {}
+    feats = get_features(user_doc or {})
+    return {
+        "plan_id": feats["plan_id"],
+        "plan_name": feats["plan_name"],
+        "status": sub.get("status"),
+        "current_period_end": sub.get("current_period_end"),
+        "cancel_at_period_end": bool(sub.get("cancel_at_period_end")),
+        "stripe_customer_id": sub.get("stripe_customer_id"),
+        "stripe_subscription_id": sub.get("stripe_subscription_id"),
+        "credits_monthly": feats["credits_monthly"],
+        "features": feats["features"],
+    }
+
+
+@api.post("/subscription/checkout")
+async def create_subscription_checkout(payload: SubscriptionCheckoutIn, user=Depends(get_current_user)):
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(503, "stripe not configured")
+    plan_id = payload.plan_id
+    if plan_id == PLAN_FREE:
+        raise HTTPException(400, "free plan does not require checkout")
+    price_id = get_stripe_price_id(plan_id)
+    if not price_id:
+        raise HTTPException(400, f"plan '{plan_id}' has no Stripe price configured")
+
+    user_doc = await db.users.find_one({"user_id": user["user_id"]})
+    if not user_doc:
+        raise HTTPException(401, "user not found")
+    customer_id = await _get_or_create_stripe_customer(user_doc)
+
+    session = stripe.checkout.Session.create(
+        mode="subscription",
+        customer=customer_id,
+        line_items=[{"price": price_id, "quantity": 1}],
+        success_url=payload.success_url,
+        cancel_url=payload.cancel_url,
+        allow_promotion_codes=True,
+        metadata={
+            "app_user_id": user["user_id"],
+            "plan_id": plan_id,
+            "checkout_type": "subscription",
+        },
+        subscription_data={
+            "metadata": {
+                "app_user_id": user["user_id"],
+                "plan_id": plan_id,
+            }
+        },
+    )
+    return {"checkout_url": session.url, "session_id": session.id}
+
+
+@api.post("/subscription/portal")
+async def create_billing_portal(user=Depends(get_current_user)):
+    """Stripe Billing Portal session for self-service cancel/upgrade/update PM."""
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(503, "stripe not configured")
+    user_doc = await db.users.find_one({"user_id": user["user_id"]})
+    sub = (user_doc or {}).get("subscription") or {}
+    cid = sub.get("stripe_customer_id")
+    if not cid:
+        raise HTTPException(400, "no Stripe customer for this user — subscribe first")
+    return_url = os.environ.get("FRONTEND_BASE_URL", "https://app.etoh.io") + "/subscription"
+    portal = stripe.billing_portal.Session.create(customer=cid, return_url=return_url)
+    return {"portal_url": portal.url}
+
+
+@api.get("/features/me")
+async def get_my_features(user=Depends(get_current_user)):
+    user_doc = await db.users.find_one({"user_id": user["user_id"]})
+    return get_features(user_doc or {})
+
+
+# ---------------------------------------------------------------------------
+# Admin API (X-Admin-Key header) — for etoh.io/studio/admin back-office
+# ---------------------------------------------------------------------------
+ETOH_ADMIN_API_KEY = os.environ.get("ETOH_ADMIN_API_KEY", "")
+
+
+async def require_admin_key(request: Request) -> None:
+    """FastAPI dependency: validates the X-Admin-Key header.
+
+    Use as: ` _: None = Depends(require_admin_key)` on any admin-only route.
+    Returns 401 if missing, 403 if mismatch, 503 if admin not configured.
+    """
+    if not ETOH_ADMIN_API_KEY:
+        raise HTTPException(503, "admin api not configured")
+    provided = request.headers.get("x-admin-key") or request.headers.get("X-Admin-Key")
+    if not provided:
+        raise HTTPException(401, "missing X-Admin-Key header")
+    if not hmac.compare_digest(provided, ETOH_ADMIN_API_KEY):
+        raise HTTPException(403, "invalid admin key")
+
+
+@api.get("/admin/health")
+async def admin_health(_: None = Depends(require_admin_key)):
+    """Sanity-check endpoint for the admin back-office — proves the key works."""
+    return {"ok": True, "service": "etoh-api", "ts": _now().isoformat()}
+
+
+@api.get("/admin/metrics/summary")
+async def admin_metrics_summary(_: None = Depends(require_admin_key)):
+    """Aggregated metrics for the admin dashboard (`etoh.io/studio/admin`).
+
+    Returns: users count, active subscriptions, MRR estimate, total credits consumed,
+    Hub items count, public Hub views, LLM events 30d.
+    """
+    users_count = await db.users.count_documents({})
+    active_subs = await db.users.count_documents({"subscription.status": {"$in": ["active", "trialing"]}})
+    hub_items = await db.hub_items.count_documents({})
+    # MRR: sum credits_monthly€ × active subs per plan
+    mrr_cursor = db.users.aggregate([
+        {"$match": {"subscription.status": {"$in": ["active", "trialing"]}}},
+        {"$group": {"_id": "$subscription.plan_id", "count": {"$sum": 1}}},
+    ])
+    mrr_eur = 0.0
+    by_plan: Dict[str, int] = {}
+    async for row in mrr_cursor:
+        pid = row["_id"]
+        plan = PLAN_BY_ID.get(pid)
+        if plan:
+            mrr_eur += plan["price_eur"] * row["count"]
+            by_plan[pid] = row["count"]
+    # Signups last 30 days
+    since = _now() - timedelta(days=30)
+    signups_30d = await db.users.count_documents({"created_at": {"$gte": since}})
+    # Credits spent (wallet_events with negative or via llm_events if any)
+    llm_events_30d = 0
+    try:
+        llm_events_30d = await db.llm_events.count_documents({"created_at": {"$gte": since}})
+    except Exception:
+        pass
+    # Public hub views
+    hub_views = 0
+    try:
+        agg = db.hub_items.aggregate([{"$group": {"_id": None, "total": {"$sum": "$views"}}}])
+        async for row in agg:
+            hub_views = int(row.get("total") or 0)
+    except Exception:
+        pass
+
+    return {
+        "users_count": users_count,
+        "active_subscriptions": active_subs,
+        "subscriptions_by_plan": by_plan,
+        "mrr_eur": round(mrr_eur, 2),
+        "arr_eur": round(mrr_eur * 12, 2),
+        "signups_30d": signups_30d,
+        "hub_items": hub_items,
+        "hub_public_views": hub_views,
+        "llm_events_30d": llm_events_30d,
+        "generated_at": _now().isoformat(),
+    }
+
+
+@api.post("/admin/users/{user_id}/credits")
+async def admin_grant_credits(
+    user_id: str,
+    payload: Dict[str, Any],
+    _: None = Depends(require_admin_key),
+):
+    """Grant or revoke credits to a user manually (from the admin back-office)."""
+    delta = int(payload.get("delta") or 0)
+    reason = str(payload.get("reason") or "admin_grant")
+    if delta == 0:
+        raise HTTPException(400, "delta must be non-zero")
+    res = await db.users.update_one({"user_id": user_id}, {"$inc": {"credits": delta}})
+    if res.matched_count == 0:
+        raise HTTPException(404, "user not found")
+    await db.wallet_events.insert_one({
+        "id": f"adm_{uuid.uuid4().hex[:10]}",
+        "user_id": user_id,
+        "credits": delta,
+        "source": "admin",
+        "reason": reason,
+        "created_at": _now(),
+    })
+    user_doc = await db.users.find_one({"user_id": user_id})
+    return {"ok": True, "user_id": user_id, "credits": int(user_doc.get("credits") or 0)}
 
 
 # ---------- Auth ----------
@@ -1622,6 +2001,8 @@ async def on_startup():
     # Stripe webhook idempotency
     await db.stripe_events.create_index("event_id", unique=True)
     await db.stripe_events.create_index("received_at", expireAfterSeconds=60 * 60 * 24 * 90)  # 90d TTL
+    # Subscription invoice idempotency (separate from events — invoices have their own id)
+    # _id is already unique in Mongo, no extra index needed.
     logger.info("EtOH backend started — indexes ensured.")
 
 

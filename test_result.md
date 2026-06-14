@@ -102,6 +102,52 @@
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
 
+backend:
+  - task: "Sentry backend integration (sentry-sdk[fastapi] + Starlette + logging)"
+    implemented: true
+    working: true
+    file: "backend/server.py, backend/core/sentry_init.py, backend/.env"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "Sentry init + filter 4xx. Confirmed via /api/debug/sentry."
+  - task: "Stripe webhook with idempotency + payment_intent.payment_failed handling"
+    implemented: true
+    working: true
+    file: "backend/server.py, backend/.env"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "23/23 tests passed in iteration_3."
+  - task: "Stripe SUBSCRIPTIONS — plans config, checkout, portal, /me, /features/me + webhook handlers (created/updated/deleted, invoice.paid)"
+    implemented: true
+    working: true
+    file: "backend/server.py, backend/core/subscriptions.py, backend/scripts/seed_stripe_subscriptions.py, backend/.env"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "Seed script created Pro/Business/Premium Stripe Products + recurring monthly Prices in TEST mode (price_1TiL0G… IDs stored in .env). New endpoints: GET /api/subscription/plans (public, lists 4 tiers Free/Pro/Business/Premium with feature_lines), GET /api/subscription/me (auth, returns plan/status/period_end), POST /api/subscription/checkout (auth, creates subscription-mode Checkout Session and lazily creates Stripe Customer), POST /api/subscription/portal (auth, Stripe Billing Portal session), GET /api/features/me (auth, returns feature flags). Webhook extended with _handle_subscription_upsert (price_id -> plan_id via core.subscriptions.get_stripe_price_id), _handle_subscription_deleted (status=canceled + plan=free), _handle_invoice_paid (idempotent via stripe_invoices._id, credits user according to plan.credits_monthly, skips billing_reason!=subscription_cycle/create/update). Confirmed GET /api/subscription/plans returns 4 plans with proper feature_lines and stripe_configured=true."
+  - task: "Admin API (X-Admin-Key header) for etoh.io/studio/admin back-office"
+    implemented: true
+    working: true
+    file: "backend/server.py, backend/.env"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "Generated 64-char ETOH_ADMIN_API_KEY (etoh_admin_b7a3e9d2…f2a4c7e) in backend/.env. Added require_admin_key dependency that does hmac.compare_digest on X-Admin-Key header. Endpoints: GET /api/admin/health (sanity), GET /api/admin/metrics/summary (users count, active subs by plan, MRR/ARR estimate from active subs * plan price, signups 30d, hub items, hub views, llm events 30d), POST /api/admin/users/{user_id}/credits (grant/revoke credits, logs to wallet_events with source=admin). Confirmed curl with X-Admin-Key returns 200 health."
+
 frontend:
   - task: "Profile page rebuilt to mirror onboarding + passive memory (auto-extract)"
     implemented: true
@@ -120,36 +166,23 @@ frontend:
     file: "frontend/src/lib/sentry.ts, frontend/app/_layout.tsx, frontend/src/auth/AuthContext.tsx, frontend/app.json, frontend/.env"
     stuck_count: 0
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
       - working: true
         agent: "main"
-        comment: "Wired Sentry into the Expo app. initSentry() runs at module load (before SplashScreen.preventAutoHideAsync), DSN from EXPO_PUBLIC_SENTRY_DSN. RootLayout exported via Sentry.wrap. AuthContext now calls setSentryUser on every setUser. Confirmed via browser console: '[Sentry] initialised {env: development}'. App still loads the language picker correctly."
-
-backend:
-  - task: "Sentry backend integration (sentry-sdk[fastapi] + Starlette + logging)"
+        comment: "Confirmed working in iteration_3."
+  - task: "Subscription page /subscription (4-tier pricing cards + Stripe checkout + portal)"
     implemented: true
     working: true
-    file: "backend/server.py, backend/core/sentry_init.py, backend/.env"
+    file: "frontend/app/subscription/index.tsx, frontend/app/subscription/success.tsx, frontend/app/subscription/_layout.tsx, frontend/app/(tabs)/index.tsx"
     stuck_count: 0
     priority: "high"
     needs_retesting: true
     status_history:
       - working: true
         agent: "main"
-        comment: "Added core/sentry_init.py with FastApi+Starlette+Logging integrations. init_sentry() called BEFORE FastAPI() in server.py so the middleware kicks in. SENTRY_DSN read from .env. Filter drops 4xx HTTPException to keep noise low. Confirmed via /api/debug/sentry which raises a RuntimeError and the stderr shows 'Sentry is attempting to send 2 pending events'. Need a Sentry dashboard check to confirm event ingestion + verify user context is attached after login."
-  - task: "Stripe webhook with idempotency + payment_intent.payment_failed handling"
-    implemented: true
-    working: true
-    file: "backend/server.py, backend/.env"
-    stuck_count: 0
-    priority: "high"
-    needs_retesting: true
-    status_history:
-      - working: true
-        agent: "main"
-        comment: "Switched env to Stripe TEST keys (sk_test_, pk_test_, whsec_). Webhook now mounted at BOTH /api/wallet/webhook (legacy) and /api/stripe/webhook (canonical). Added Mongo collection stripe_events with unique index on event_id (created at startup) for proper idempotency. Handles checkout.session.completed (credits user + marks wallet_checkouts paid) and payment_intent.payment_failed (logs failure code/message). 90-day TTL on stripe_events. Signature verification active with the new whsec_ secret. Need to verify with stripe CLI replay or Dashboard 'Send test event'."
+        comment: "Created /subscription with 4 plan cards (Free / Pro 19€ POPULAIRE / Business 49€ / Premium 99€). Pulls /api/subscription/plans + /api/subscription/me, shows 'VOTRE PLAN' badge on current plan, 'S'abonner' button → POST /subscription/checkout → window.location.href (web) or WebBrowser.openBrowserAsync (native). Current paid plan shows 'Gérer mon abonnement' → Stripe Billing Portal. Made the credit chip on home tab clickable to go to /subscription. Success page /subscription/success acknowledges Stripe redirect with session_id, auto-redirects to home after 6s. Screenshot confirmed: 4 cards render, 3 Subscribe buttons visible."
 
 agent_communication:
   - agent: "main"
-    message: "P0 progress: Stripe switched to TEST keys + proper webhook with idempotency. Sentry online both frontend and backend (verified locally). Ready for testing_agent to validate: 1) all auth/coach/studio/pilot/hub/crm/wallet endpoints still work after the Sentry middleware insertion, 2) the Stripe webhook accepts a properly-signed event (use a mock checkout.session.completed payload signed with whsec_QVCyl4ZUwgAqGrcVGT72D887khZoLFh5 — see test plan), 3) replay protection via stripe_events.event_id unique index, 4) /api/debug/sentry returns 500 (intentional)."
+    message: "Phase A done: Stripe subscriptions (4-tier) + admin API (X-Admin-Key) + frontend subscription page. All 4 tiers visible and styled. Ready for testing_agent to validate: 1) subscription checkout creates a proper Stripe subscription Checkout Session URL (mode=subscription), 2) webhook handles customer.subscription.created/.updated/.deleted with correct plan mapping from price_id, 3) invoice.paid renews credits idempotently via stripe_invoices._id, 4) /api/admin/* endpoints require X-Admin-Key and reject without/wrong key, 5) /api/admin/metrics/summary returns proper aggregates, 6) /api/admin/users/{user_id}/credits grants credits and logs to wallet_events, 7) backward compat — credit pack checkout still works, 8) all previous endpoints (auth, coach, studio, pilot, hub, crm) still return 200."
