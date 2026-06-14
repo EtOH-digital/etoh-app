@@ -1,0 +1,49 @@
+{
+  "summary": "Iteration 8 — Phase 4 Pricing engine + Phase 5 MMR rerank backend tests. RESULT: 19/20 (95.0%) passing. All Pricing endpoints (defaults, compute, compute-export, compute-negative, compute-no-auth, save success, save 404) work correctly. Direct channel retail TTC = 13.50€ as expected for base_cost=4.5€ (4.5/0.4 = 11.25 producer × 1.0 retail × 1.2 VAT). Export landed_cost = 7.70€ for {base=4.5, ship=2, duty=15} matches formula. Save snapshot persists pricing.snapshot + pricing.base_cost_eur in hub_items doc. MMR specific-query works (top_k=4 'cuvée Aurore prix' surfaces the small Aurore doc as user requested). ONE quality issue: MMR diversity for general query 'vin bio' top_k=5 returned ALL 5 chunks from the single Wikipedia 'Vin' doc — the Aurore doc was crowded out. The current λ=0.65 doesn't enforce cross-doc diversity strongly enough; this is the exact symptom MMR was added to fix. Quota regression (6th doc → 402) still works. All sampled regression endpoints (root, auth/me, admin/health, admin/metrics/summary, subscription/plans, hub/me, public/hub/INVALID → 404, enrich/ean) still 200. Cleanup verified: user reverted to free, 0 rag_documents, 0 rag_chunks, 0 TEST_ hub_items, 0 pricing snapshots left.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "POST /api/rag/search (MMR rerank in core/rag.py:142-202)",
+        "issue": "MMR diversity does NOT kick in strongly enough for general queries. Query 'vin bio' top_k=5 with 2 docs in index (1 large Wiki + 1 short Aurore doc that contains 'rosé bio') returned 5/5 chunks from the SAME Wikipedia doc. The λ=0.65 default heavily favours query similarity over diversity (math: 0.65*sim - 0.35*max_div). For a chunk to win against an already-selected sibling, its query similarity has to compensate for the 0.95+ intra-doc cosine similarity penalty — short specific docs whose query sim is lower than wiki chunks lose. The user-requested guarantee was 'top_k=5 chunks come from at least 2 doc_ids'. Mitigation: (a) lower default λ to ~0.4-0.5, (b) add a per-doc cap (e.g. max ceil(top_k/2) chunks per doc_id), (c) keep λ=0.65 but post-filter to ensure ≥2 doc_ids. Specific-query MMR DOES work — top_k=4 'cuvée Aurore prix' correctly surfaces the small Aurore doc (test_mmr_search_aurore_present PASSED)."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_pricing_mmr_phase4.py",
+    "/app/test_reports/pytest/iteration_8_results.xml"
+  ],
+  "action_items": [
+    "[QUALITY] core/rag.py search_chunks: tune MMR for cross-doc diversity. Options: (1) reduce mmr_lambda default from 0.65 → 0.4-0.5, (2) add per-doc cap in selection loop (e.g. max 2-3 chunks/doc_id when there are multiple docs), (3) hybrid: pick top-1 by similarity then for next picks force a different doc_id until each doc has ≥1 representative if pool spans multiple docs. The user explicitly wanted 'top_k=5 chunks come from at least 2 different doc_ids' — current λ doesn't guarantee this for general queries.",
+    "[OPTIONAL] core/pricing.py: consider exposing 'shipping_eur' and 'duty_pct' in default_channels_payload response so the frontend pricing UI knows they exist as compute inputs (today the calculator UI would need to hardcode these as 'export-only' fields).",
+    "[OPTIONAL] routes/pricing.py:62-71 — save_product_pricing uses 'product_id' both in path AND in body. The body's product_id is unused (path is the source of truth). Either drop product_id from SavePricingIn or assert they match for safety."
+  ],
+  "critical_code_review_comments": [
+    "core/pricing.py:90-94 — compute_prices uses `max(1 - margin_pct/100.0, 0.05)` to guard div-by-zero when margin=100%. Good defensive coding; means a 100% margin caps producer_price at base/0.05 = 20× base instead of infinity. Document this behaviour or reject margin_pct >= 100 in the Pydantic schema for clearer errors.",
+    "core/pricing.py:81-84 — Export landed_cost = base + shipping; then *= (1+duty_pct/100); then *= (1+fx_buffer/100). Note that this means duty is applied on (base+shipping) and the fx buffer is applied AFTER duty (so fx is also on duty). For {4.5, 2, 15%, 3%}: (6.5*1.15)*1.03 = 7.4750 * 1.03 = 7.69925 ≈ 7.70. The user expectation in the request was '6.5 then +15% duty +3% buffer ≈ 7.70' — matches. Confirm with the product owner this nesting order is desired (some industries compound duty on CIF+insurance, others apply duty before freight). Today's implementation is consistent and matches the spec.",
+    "core/pricing.py:35-41 — DEFAULT_CHANNELS hardcoded. Consider moving to a JSON config or DB collection so admin can tune market multipliers per region without a code deploy.",
+    "routes/pricing.py:55-72 — save_product_pricing scopes by user_id+type='product'. Good multi-tenant isolation. However, no validation that pricing payload structure matches what /compute returns — a malformed dict will silently persist. Consider validating pricing has 'channels' key + per-channel shape via a Pydantic submodel.",
+    "core/rag.py:185 — `pool = candidates[: max(top_k * 4, 20)][:60]` — the cap of 60 means for top_k>=15, the effective pool ratio shrinks (e.g. top_k=20 → pool=60 = 3×). Probably fine since user-facing top_k is small, but the Coach pathway with future plan-aware top_k might want a higher cap.",
+    "core/rag.py:195 — `max_div = max(cosine_similarity(emb, s_emb) for _s, _d, s_emb in selected)` recomputes cosine on every iteration for every remaining candidate. O(top_k² × pool) cosines. Fine for top_k≤10 / pool≤60 (=36000 dot products of 384-d vectors ≈ 14M float ops, sub-ms with numpy) but worth a comment for future readers."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_pricing_mmr_phase4.py (new — 20 tests covering pricing engine + MMR + regression + cleanup)",
+    "/app/test_reports/pytest/iteration_8_results.xml",
+    "/app/test_reports/iteration_8.json"
+  ],
+  "success_rate": {
+    "backend": "19/20 (95.0%). All pricing tests PASS (7/7). MMR specific-query PASS, MMR diversity FAIL (1/2 in MMR class). Quota regression PASS. All 8 regression endpoints PASS.",
+    "frontend": "not tested (backend-only request)"
+  },
+  "seed_data_creation": "Promoted vigneron@etoh-test.com to {plan_id:'pro', status:'active'} via autouse module fixture (snapshotted original sub). At teardown: restored original sub (now free/null), deleted all rag_documents+rag_chunks for created doc_ids and any leftover owned by this user, deleted hub_items with TEST_ name prefix. Verified post-run: user back to free, 0 rag docs, 0 chunks, 0 TEST_ hub_items, 0 pricing snapshots.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "MMR rerank in core/rag.py needs tuning for general queries; specific queries work. The 'vin bio' test case is a good regression for any future MMR tweak — it MUST return chunks from ≥2 doc_ids with top_k=5 once tuned. Pricing engine is solid and all formulas match the iteration_8 spec exactly (direct retail=13.50€, export landed=7.70€ with shipping=2/duty=15%/fx=3%). Hub items get an 'id' field (not 'doc_id'); pricing save filter is {id, user_id, type:'product'}. Pricing routes are NOT plan-gated — any authenticated user can call /api/pricing/compute regardless of plan; product owner may want Pro-gating for save_product_pricing.",
+  "rca_of_issue": "test_mmr_diversity_vin_bio FAILED: for query 'vin bio' top_k=5 with 2 docs indexed (large fr.wikipedia/Vin + tiny 'Aurore rosé bio' text), MMR returned 5/5 chunks from the Wikipedia doc only. RCA: MMR formula `0.65*sim - 0.35*max_div_to_selected` with λ=0.65 still heavily prefers query-similarity. Wikipedia chunks have higher cosine similarity to 'vin bio' (the Wiki article is literally about 'vin' and mentions 'biologique' in multiple chunks); the single Aurore chunk's similarity to 'vin bio' is lower because it focuses on 'rosé', a specific cuvée and a price point. Even though Aurore would be MORE diverse (lower cosine to wiki chunks), the diversity penalty in MMR is multiplied by only 0.35 and the wiki chunks are not perfectly identical to each other (intra-wiki cosine ~0.6-0.8, not 1.0), so each new wiki pick has manageable max_div penalty. Net: wiki chunks keep winning. Mitigation: (a) lower λ to 0.4, (b) per-doc cap, (c) post-MMR doc-id rebalance. For comparison the specific query 'cuvée Aurore prix' worked (Aurore chunk is top-1 by similarity, no diversity penalty needed)."
+}

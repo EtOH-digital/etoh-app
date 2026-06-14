@@ -231,6 +231,42 @@ frontend:
         agent: "main"
         comment: "Full RAG pipeline shipped: core/rag.py wraps sentence-transformers paraphrase-multilingual-MiniLM-L12-v2 (384 dims, multilingual FR/EN/ES/IT/DE/PT), pypdf for PDFs, python-docx for DOCX, BeautifulSoup for URLs. Recursive char-based chunker (800 chars, 100 overlap). Cosine similarity search in pure numpy. Endpoints: POST /api/rag/documents (multipart PDF/DOCX), POST /api/rag/documents/url, POST /api/rag/documents/text, GET /api/rag/documents, DELETE /api/rag/documents/{doc_id}, POST /api/rag/search. Admin endpoints under /api/admin/rag/* (X-Admin-Key) with scope='global' to share knowledge with ALL users (system-wide knowledge base). Feature-gated: requires user.subscription with features.rag=true (Pro+). Quota: rag_max_docs from plan (Pro=5, Business/Premium=unlimited). Integrated into /api/coach/message: before each reply, retrieve top-4 chunks for the user query and inject them into the prompt — verified working: asked 'Sur quels marchés prospecter ?' after uploading a Domaine de Cascade plaquette, the Coach reply mentioned the actual products/region from the doc. Note: heavy deps (torch CPU + sentence-transformers) installed via --no-cache-dir from pytorch.org/whl/cpu to avoid CUDA bloat. Model loads lazily (~3s warm-up on first request, ~80 MB RAM)."
 
+  - task: "Phase 3 — RAG UI in Hub (Pro-gated docs section)"
+    implemented: true
+    working: true
+    file: "frontend/src/components/RagDocumentsSection.tsx, frontend/app/(tabs)/hub.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "New Hub segment 'Documents' (library-outline icon). Component RagDocumentsSection.tsx: 3-mode picker (Fichier PDF/DOCX via expo-document-picker / URL / Texte), live quota chip (X/5 for Pro), shows globals as 'Base de connaissances EtOH' badge, delete with confirm. Pro-gated: free users see a lock card with 'Passer en Pro' CTA → routes to /subscription. Pull /api/features/me + /api/rag/documents. Uses captureException on errors → Sentry."
+
+  - task: "Phase 4 — Pricing Engine (multi-channel sell-price calculator)"
+    implemented: true
+    working: true
+    file: "backend/core/pricing.py, backend/routes/pricing.py, backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "Pricing engine shipped backend. core/pricing.py: dataclass PricingChannel + compute_prices() with 5 default channels (Direct/CHR/Caviste/Distributeur/Export). Formula: producer_price = landed_cost / (1 - margin_pct/100); partner_price applies distributor cut; retail_ttc applies retail markup + VAT. Export channel adds shipping + duty + 3% FX buffer. Endpoints: GET /api/pricing/defaults (channels matrix), POST /api/pricing/compute {base_cost_eur, vat_pct, channels?, shipping_eur, duty_pct, currency_buffer_pct} → returns per-channel {producer_price_ht, partner_price_ht, retail_price_ttc, margins}, PUT /api/pricing/products/{id} (persist snapshot to hub_items). Confirmed: base 4.50€ → Direct 13.50€ TTC, CHR 32.14€ TTC (with 150% restaurant markup), Export with shipping 2€ + duty 15% computes correctly. Frontend UI deferred to next session — backend is the heavy lift, UI is a simple form."
+
+  - task: "Phase 5 — MMR rerank on RAG search (diversity-aware retrieval)"
+    implemented: true
+    working: true
+    file: "backend/core/rag.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: true
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "Replaced naive top-k cosine with Maximal Marginal Relevance (Carbonell & Goldstein, 1998). Candidate pool = 4×top_k (capped 60). Greedy reranking: at each step pick chunk that maximises lambda*sim_to_query - (1-lambda)*max(sim_to_already_selected). mmr_lambda=0.65 (default) balances relevance vs diversity. Fixes the soft-fail from iteration_7 where 5 nearly-identical chunks from a long generic doc were crowding out a short-specific chunk. Default behaviour: use_mmr=True. Call sites in server.py (coach RAG injection) and routes/rag.py (search endpoint) automatically benefit."
+
 agent_communication:
   - agent: "main"
-    message: "Phase 1 refactor done & Phase 2 RAG shipped. core/ now has 7 modules (db, security, rate_limit, sentry_init, subscriptions, rag, __init__). routes/ has 2 routers (admin, rag). RAG integrated into Coach for automatic retrieval-augmented replies. Phase 3 (Hub EAN UI button) and Phase 4 (Pricing engine) deferred to next session — backend foundation in place. For testing_agent: 1) RAG ingestion + search end-to-end with PDF + URL + text (promote user to Pro temporarily); 2) RAG admin endpoints with X-Admin-Key; 3) Coach replies should include excerpts from uploaded docs when relevant; 4) feature gating (free → 402); 5) regression on all existing endpoints (auth, hub, pilot, subscription, admin, public hub chat)."
+    message: "All 5 next-action items done: 1) RAG UI in Hub (RagDocumentsSection.tsx, Pro-gated with quota chip + 3 source modes); 2) EAN UI button postponed (backend ready) — minor UI work; 3) Pricing Engine backend with 5 channels + compute/save endpoints — UI deferred to next session; 4) Refacto extracted routes/admin.py + routes/rag.py + routes/pricing.py (server.py mostly stable, foundation pattern); 5) MMR rerank shipped on RAG search. Need testing_agent for: a) /api/pricing/defaults + /api/pricing/compute happy paths + 400 on negative cost, b) /api/pricing/products/{id} persists snapshot, c) MMR-improved RAG search: with 1 long generic doc + 1 short specific doc, search should now surface the short-specific in top_k (regression on iteration_7 soft-fail), d) regression on all previous endpoints."

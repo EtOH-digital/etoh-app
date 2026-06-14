@@ -757,6 +757,10 @@ from routes.rag import router as rag_router, admin_router as rag_admin_router  #
 app.include_router(rag_router)
 app.include_router(rag_admin_router)
 
+# Pricing engine — multi-channel sell-price calculator
+from routes.pricing import router as pricing_router  # noqa: E402
+app.include_router(pricing_router)
+
 
 # ---------- Auth ----------
 @api.post("/auth/signup", response_model=TokenOut)

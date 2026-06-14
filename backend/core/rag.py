@@ -145,12 +145,21 @@ async def search_chunks(
     query: str,
     top_k: int = 5,
     include_global: bool = True,
+    use_mmr: bool = True,
+    mmr_lambda: float = 0.65,
 ) -> List[Dict[str, Any]]:
     """Return the top_k chunks most similar to `query`, scoped to a user
-    (+ optionally the system-wide `global` admin docs)."""
+    (+ optionally the system-wide `global` admin docs).
+
+    When `use_mmr=True` we apply **Maximal Marginal Relevance** (Carbonell &
+    Goldstein, 1998) over a candidate pool of 4×top_k. This avoids the case
+    where 5 nearly-identical chunks from the same long document dominate the
+    results and crowd out short-but-specific chunks from other documents.
+    `mmr_lambda` close to 1.0 → favours similarity to query, close to 0.0 →
+    favours diversity. 0.65 is a sane default for FR/multilingual content.
+    """
     q_emb = embed_text(query)
-    # Pull user's chunks + globals (small datasets in MongoDB local — full scan is fine
-    # up to ~10K chunks/user. Swap to MongoDB Atlas Vector Search at scale.)
+
     user_filter: Dict[str, Any] = {"$or": [{"user_id": user_id}]}
     if include_global:
         user_filter["$or"].append({"scope": "global"})
@@ -158,16 +167,42 @@ async def search_chunks(
         user_filter,
         {"chunk_id": 1, "doc_id": 1, "chunk_text": 1, "embedding": 1, "doc_name": 1, "scope": 1, "_id": 0},
     )
-    scored: List[Tuple[float, Dict[str, Any]]] = []
+
+    candidates: List[Tuple[float, Dict[str, Any], List[float]]] = []
     async for c in cursor:
         emb = c.get("embedding")
         if not emb:
             continue
         score = cosine_similarity(q_emb, emb)
-        scored.append((score, c))
-    scored.sort(key=lambda x: x[0], reverse=True)
-    out = []
-    for score, c in scored[:top_k]:
+        candidates.append((score, c, emb))
+
+    candidates.sort(key=lambda x: x[0], reverse=True)
+
+    if not use_mmr or len(candidates) <= top_k:
+        selected = candidates[:top_k]
+    else:
+        # MMR: greedy reranking from a 4×top_k pool (capped at 60)
+        pool = candidates[: max(top_k * 4, 20)][:60]
+        selected: List[Tuple[float, Dict[str, Any], List[float]]] = []
+        remaining = list(pool)
+        # First: always pick top-1 by similarity
+        selected.append(remaining.pop(0))
+        while len(selected) < top_k and remaining:
+            best_idx = -1
+            best_score = -1e9
+            for i, (sim, _doc, emb) in enumerate(remaining):
+                # Diversity = max cosine sim to any already-selected chunk
+                max_div = max(cosine_similarity(emb, s_emb) for _s, _d, s_emb in selected)
+                mmr = mmr_lambda * sim - (1 - mmr_lambda) * max_div
+                if mmr > best_score:
+                    best_score = mmr
+                    best_idx = i
+            if best_idx == -1:
+                break
+            selected.append(remaining.pop(best_idx))
+
+    out: List[Dict[str, Any]] = []
+    for score, c, _emb in selected:
         out.append({
             "chunk_id": c.get("chunk_id"),
             "doc_id": c.get("doc_id"),

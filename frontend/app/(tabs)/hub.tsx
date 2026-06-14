@@ -22,6 +22,7 @@ import { useAuth } from "@/src/auth/AuthContext";
 import { apiFetch } from "@/src/api/client";
 import { useT, useI18n } from "@/src/i18n/I18nContext";
 import { LANGUAGES } from "@/src/i18n/translations";
+import RagDocumentsSection from "@/src/components/RagDocumentsSection";
 
 type HubItem = {
   id: string;
@@ -39,7 +40,7 @@ type HubItem = {
   featured?: boolean;
 };
 
-type Segment = "profile" | "catalogue" | "network" | "wallet" | "share" | "settings";
+type Segment = "profile" | "catalogue" | "docs" | "network" | "wallet" | "share" | "settings";
 
 // ---------------------------------------------------------------------------
 // Aligned with onboarding wizard (/app/(onboarding)/index.tsx)
@@ -517,6 +518,7 @@ export default function Profile() {
               {([
                 { id: "profile", label: t("hub.seg.profile"), icon: "person-outline" },
                 { id: "catalogue", label: t("hub.seg.catalogue"), icon: "albums-outline" },
+                { id: "docs", label: "Documents", icon: "library-outline" },
                 { id: "network", label: t("hub.seg.network"), icon: "people-outline" },
                 { id: "wallet", label: t("hub.seg.wallet"), icon: "card-outline" },
                 { id: "share", label: t("hub.seg.share"), icon: "share-social-outline" },
@@ -979,6 +981,11 @@ export default function Profile() {
             <Text style={s.logoutText}>{t("profile.logout")}</Text>
           </TouchableOpacity>
           </>)}
+
+          {/* ======================================================== */}
+          {/* DOCS — RAG / Base de connaissances                       */}
+          {/* ======================================================== */}
+          {segment === "docs" && <RagDocumentsSection />}
 
           {/* ======================================================== */}
           {/* CATALOGUE — Products & Services                          */}
