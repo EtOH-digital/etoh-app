@@ -274,7 +274,7 @@ async def admin_ingest_document(
     else:
         raise HTTPException(400, "Only .pdf and .docx supported.")
     return await _store_document(
-        user_id=None if scope == "global" else None,  # global has no owner
+        user_id=None,  # global / admin-uploaded docs are owner-less
         scope=scope,
         source_type=source_type,
         name=fname,
