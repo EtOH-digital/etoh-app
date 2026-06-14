@@ -384,6 +384,7 @@ from collections import defaultdict, deque
 import time as _time
 
 _USER_HITS: Dict[str, deque] = defaultdict(deque)
+_IP_HITS: Dict[str, deque] = defaultdict(deque)
 
 
 def llm_rate_limit(max_per_minute: int = 20):
@@ -409,6 +410,33 @@ def llm_rate_limit(max_per_minute: int = 20):
         return current_user
 
     return _dep
+
+
+def _ip_rate_limit_check(request: Request, key: str, max_per_minute: int) -> None:
+    """Per-IP sliding-window rate limit for anonymous/public endpoints.
+
+    Used in place of `@limiter.limit(...)` because slowapi 0.1.10 mis-handles
+    Pydantic body params on FastAPI 0.110+ (gets parsed as a query param).
+    Raise 429 when over budget.
+    """
+    # Behind K8s ingress, request.client.host is the proxy pod IP (rotates).
+    # Prefer X-Forwarded-For (first hop = real client) when present.
+    xff = request.headers.get("x-forwarded-for") or request.headers.get("X-Forwarded-For")
+    if xff:
+        ip = xff.split(",")[0].strip()
+    else:
+        ip = (request.client.host if request.client else "unknown") or "unknown"
+    bucket_key = f"{key}:{ip}"
+    now = _time.time()
+    dq = _IP_HITS[bucket_key]
+    while dq and dq[0] < now - 60:
+        dq.popleft()
+    if len(dq) >= max_per_minute:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many requests — please slow down (limit: {max_per_minute}/min).",
+        )
+    dq.append(now)
 
 
 @api.get("/")
@@ -2504,9 +2532,9 @@ RULES:
 
 
 @api.post("/public/hub/{slug}/chat")
-@limiter.limit("10/minute")
 async def public_hub_chat(request: Request, slug: str, payload: PublicHubChatIn):
     """Anonymous conversational chat for a public Hub. Rate-limited per IP."""
+    _ip_rate_limit_check(request, key=f"hubchat:{slug}", max_per_minute=10)
     owner = await db.users.find_one({"business_profile.hub_slug": slug})
     if not owner:
         raise HTTPException(404, "hub not found")
@@ -2585,9 +2613,9 @@ class HubLeadIn(BaseModel):
 
 
 @api.post("/public/hub/{slug}/lead")
-@limiter.limit("5/minute")
 async def public_hub_lead(request: Request, slug: str, payload: HubLeadIn):
     """Capture a lead from a public Hub visitor and create a prospect in the owner's CRM."""
+    _ip_rate_limit_check(request, key=f"hublead:{slug}", max_per_minute=5)
     owner = await db.users.find_one({"business_profile.hub_slug": slug})
     if not owner:
         raise HTTPException(404, "hub not found")
@@ -2681,7 +2709,11 @@ async def enrich_by_ean(ean: str, user=Depends(get_current_user)):
         raise HTTPException(400, "EAN must be 8-14 digits")
     import requests as _rq
     try:
-        r = _rq.get(f"https://world.openfoodfacts.org/api/v2/product/{ean}.json", timeout=10)
+        r = _rq.get(
+            f"https://world.openfoodfacts.org/api/v2/product/{ean}.json",
+            headers={"User-Agent": "etoh-pilot/1.0 (contact@etoh.fr)"},
+            timeout=10,
+        )
     except Exception as e:
         raise HTTPException(503, f"OpenFoodFacts unreachable: {e}")
     if r.status_code != 200:
