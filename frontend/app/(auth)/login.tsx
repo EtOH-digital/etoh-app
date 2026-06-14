@@ -10,6 +10,7 @@ import {
   ScrollView,
   ActivityIndicator,
   Image,
+  Linking,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -177,7 +178,20 @@ export default function Login() {
             </TouchableOpacity>
           </View>
 
-          <Text style={s.footer}>{t("login.terms")}</Text>
+          <Text style={s.footer}>
+            {t("login.terms")}{" "}
+            <Text style={s.footerLink} onPress={() => Linking.openURL("https://etoh.io/cgu")}>
+              CGU
+            </Text>
+            {" · "}
+            <Text style={s.footerLink} onPress={() => Linking.openURL("https://etoh.io/privacy")}>
+              Privacy
+            </Text>
+            {" · "}
+            <Text style={s.footerLink} onPress={() => Linking.openURL("https://etoh.io/legal")}>
+              Legal
+            </Text>
+          </Text>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -223,4 +237,5 @@ const s = StyleSheet.create({
   },
   googleBtnText: { fontWeight: "500", fontSize: 14, color: Colors.text },
   footer: { textAlign: "center", color: Colors.textMuted, fontSize: 12, marginTop: Spacing.lg },
+  footerLink: { color: Colors.brandPrimary, textDecorationLine: "underline" },
 });

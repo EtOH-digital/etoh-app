@@ -37,6 +37,12 @@ from emergentintegrations.llm.chat import LlmChat, UserMessage
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
+# ---------------------------------------------------------------------------
+# Sentry — initialise BEFORE FastAPI() so middleware integration kicks in.
+# ---------------------------------------------------------------------------
+from core.sentry_init import init_sentry  # noqa: E402
+SENTRY_ENABLED = init_sentry()
+
 MONGO_URL = os.environ["MONGO_URL"]
 DB_NAME = os.environ["DB_NAME"]
 EMERGENT_LLM_KEY = os.environ["EMERGENT_LLM_KEY"]
@@ -80,6 +86,10 @@ EMERGENT_SESSION_API = "https://demobackend.emergentagent.com/auth/v1/env/oauth/
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("etoh")
+
+# Re-init Sentry now that logging is configured, so we get the confirmation log line.
+if SENTRY_ENABLED:
+    logger.info("Sentry monitoring active.")
 
 # ---------------------------------------------------------------------------
 # DB
@@ -348,10 +358,172 @@ def _make_chat(session_id: str, system_message: str) -> LlmChat:
 app = FastAPI(title="EtOH API", version="1.0.0")
 api = APIRouter(prefix="/api")
 
+# ---- Rate limiter (anti-abuse on LLM + auth endpoints) ----
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from fastapi.responses import JSONResponse
+from fastapi import Request
+
+limiter = Limiter(key_func=get_remote_address, default_limits=["120/minute"])
+app.state.limiter = limiter
+
+
+@app.exception_handler(RateLimitExceeded)
+async def _rl_handler(_request, exc):
+    return JSONResponse(
+        status_code=429,
+        content={"detail": f"Rate limit exceeded: {exc.detail}"},
+    )
+
+
+# ---- In-memory per-user rate limiter for LLM endpoints ----
+from collections import defaultdict, deque
+import time as _time
+
+_USER_HITS: Dict[str, deque] = defaultdict(deque)
+
+
+def llm_rate_limit(max_per_minute: int = 20):
+    """Per-user rate limiter (sliding 60s window). Use as a FastAPI Depends.
+
+    Default cap: 20 LLM calls / user / minute — enough for fast typing,
+    blocks scripted abuse. Increase to 40 for very cheap endpoints.
+    """
+
+    async def _dep(current_user: Dict[str, Any] = Depends(get_current_user)):
+        uid = current_user["user_id"]
+        now = _time.time()
+        dq = _USER_HITS[uid]
+        # drop old hits
+        while dq and dq[0] < now - 60:
+            dq.popleft()
+        if len(dq) >= max_per_minute:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Trop de requêtes IA — patientez quelques secondes (limite: {max_per_minute}/min).",
+            )
+        dq.append(now)
+        return current_user
+
+    return _dep
+
 
 @api.get("/")
 async def root():
     return {"name": "EtOH API", "status": "ok"}
+
+
+# ---------- Stripe webhook (signed) ----------
+@app.post("/api/wallet/webhook")
+@app.post("/api/stripe/webhook")
+async def stripe_webhook(request: Request):
+    """Stripe-signed webhook to credit users after successful checkout.
+
+    Mounted at both `/api/wallet/webhook` (legacy) and `/api/stripe/webhook` (canonical).
+    Configure your Stripe Dashboard endpoint to point to `/api/stripe/webhook`.
+    Handles `checkout.session.completed` and `payment_intent.payment_failed`.
+    Idempotency: each Stripe event id is stored in `stripe_events` (unique index).
+    """
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(status_code=503, detail="stripe not configured")
+    payload = await request.body()
+    sig = request.headers.get("stripe-signature", "")
+    try:
+        if STRIPE_WEBHOOK_SECRET:
+            event = stripe.Webhook.construct_event(payload, sig, STRIPE_WEBHOOK_SECRET)
+        else:
+            # Fallback for dev environments without a webhook secret configured.
+            import json as _json
+            event = _json.loads(payload.decode("utf-8"))
+            logging.warning("STRIPE_WEBHOOK_SECRET not set — webhook signature NOT verified.")
+    except Exception as e:
+        try:
+            import sentry_sdk
+            sentry_sdk.capture_exception(e)
+        except Exception:
+            pass
+        raise HTTPException(status_code=400, detail=f"invalid webhook signature: {e}")
+
+    # --- Idempotency: have we already processed this Stripe event? ---
+    event_id = (event.get("id") if isinstance(event, dict) else None) or None
+    if event_id:
+        try:
+            await db.stripe_events.insert_one({
+                "event_id": event_id,
+                "type": event.get("type"),
+                "received_at": _now(),
+            })
+        except Exception:
+            # Duplicate key → already processed, short-circuit.
+            return {"received": True, "duplicate": True}
+
+    etype = event.get("type") if isinstance(event, dict) else event["type"]
+    data_obj = (event.get("data") or {}).get("object") if isinstance(event, dict) else event["data"]["object"]
+
+    if etype == "checkout.session.completed":
+        session = data_obj
+        meta = (session.get("metadata") or {}) if isinstance(session, dict) else {}
+        user_id = meta.get("user_id")
+        pack_id = meta.get("pack_id")
+        if user_id and pack_id and pack_id in PACK_BY_ID:
+            pack = PACK_BY_ID[pack_id]
+            now = _now()
+            sid = session.get("id") if isinstance(session, dict) else None
+            # Belt-and-suspenders: also check wallet_events (legacy idempotency).
+            existing = await db.wallet_events.find_one({"stripe_session_id": sid}) if sid else None
+            if not existing:
+                await db.users.update_one(
+                    {"user_id": user_id},
+                    {"$inc": {"credits": pack["credits"]}},
+                )
+                # Also mark the wallet_checkout row paid if present
+                if sid:
+                    await db.wallet_checkouts.update_one(
+                        {"session_id": sid},
+                        {"$set": {"status": "paid", "paid_at": now}},
+                    )
+                await db.wallet_events.insert_one(
+                    {
+                        "id": f"evt_{uuid.uuid4().hex[:10]}",
+                        "user_id": user_id,
+                        "pack_id": pack_id,
+                        "credits": pack["credits"],
+                        "amount_eur": pack["price_eur"],
+                        "stripe_session_id": sid,
+                        "stripe_event_id": event_id,
+                        "source": "webhook",
+                        "created_at": now,
+                    }
+                )
+                logger.info(f"Stripe webhook → +{pack['credits']} credits for {user_id}")
+    elif etype == "payment_intent.payment_failed":
+        pi = data_obj if isinstance(data_obj, dict) else {}
+        err = (pi.get("last_payment_error") or {}) if isinstance(pi, dict) else {}
+        logger.warning(
+            "Stripe payment failed pi=%s code=%s msg=%s",
+            pi.get("id"), err.get("code"), err.get("message"),
+        )
+        if event_id:
+            await db.stripe_events.update_one(
+                {"event_id": event_id},
+                {"$set": {
+                    "payment_intent_id": pi.get("id"),
+                    "failure_code": err.get("code"),
+                    "failure_message": err.get("message"),
+                    "handled_at": _now(),
+                }},
+            )
+
+    return {"received": True}
+
+
+@app.get("/api/debug/sentry")
+async def debug_sentry():
+    """Test endpoint — raises an exception to verify Sentry capture. Remove in prod."""
+    if not SENTRY_ENABLED:
+        return {"sentry": "disabled"}
+    raise RuntimeError("Sentry test exception — if you see this in Sentry, monitoring works ✅")
 
 
 # ---------- Auth ----------
@@ -571,7 +743,7 @@ Format example:
 # ---------- Coach ----------
 @api.post("/coach/message")
 async def coach_message(payload: CoachMessageIn,
-                        current_user: Dict[str, Any] = Depends(get_current_user)):
+                        current_user: Dict[str, Any] = Depends(llm_rate_limit(30))):
     session_id = payload.session_id or f"coach_{current_user['user_id']}_{uuid.uuid4().hex[:8]}"
 
     # Load prior history for this session
@@ -672,7 +844,7 @@ TEMPLATE_PROMPTS_EN = {
 
 @api.post("/studio/generate")
 async def studio_generate(payload: StudioRequestIn,
-                          current_user: Dict[str, Any] = Depends(get_current_user)):
+                          current_user: Dict[str, Any] = Depends(llm_rate_limit(30))):
     bp = current_user.get("business_profile") or {}
     lang = payload.language
     template_instruction = TEMPLATE_PROMPTS_FR.get(payload.template) if lang == "fr" \
@@ -958,7 +1130,7 @@ class PilotOpenChannelIn(BaseModel):
 
 @api.post("/pilot/search")
 async def pilot_search(payload: PilotSearchIn,
-                       current_user: Dict[str, Any] = Depends(get_current_user)):
+                       current_user: Dict[str, Any] = Depends(llm_rate_limit(20))):
     """AI-driven contact suggestion. Free (no credit cost) — only outbound actions cost credits.
 
     NOTE: This is an AI-generated list of plausible contacts. Names, emails,
@@ -1437,12 +1609,15 @@ async def on_startup():
     await db.user_sessions.create_index("session_token", unique=True)
     await db.user_sessions.create_index("user_id")
     await db.user_sessions.create_index("expires_at", expireAfterSeconds=0)
+    # Stripe webhook idempotency
+    await db.stripe_events.create_index("event_id", unique=True)
+    await db.stripe_events.create_index("received_at", expireAfterSeconds=60 * 60 * 24 * 90)  # 90d TTL
     logger.info("EtOH backend started — indexes ensured.")
 
 
 # ---------- US-003 — Profil Commercial synthétique ----------
 @api.post("/profile/synthesize")
-async def profile_synthesize(current_user: Dict[str, Any] = Depends(get_current_user)):
+async def profile_synthesize(current_user: Dict[str, Any] = Depends(llm_rate_limit(10))):
     """Génère par IA un profil commercial synthétique (ICP / Positionnement / Priorités)
     à partir des données collectées lors de l'onboarding."""
     bp = current_user.get("business_profile") or {}
@@ -1557,7 +1732,7 @@ _EXTRACT_ENUMS = {
 @api.post("/profile/auto-extract")
 async def profile_auto_extract(
     payload: AutoExtractIn,
-    current_user: Dict[str, Any] = Depends(get_current_user),
+    current_user: Dict[str, Any] = Depends(llm_rate_limit(40)),
 ):
     """Claude-Cowork-style passive memory.
 
@@ -1906,7 +2081,7 @@ async def _fetch_url_text(url: str) -> str:
 @api.post("/hub/extract")
 async def hub_extract(
     payload: HubExtractIn,
-    current_user: Dict[str, Any] = Depends(get_current_user),
+    current_user: Dict[str, Any] = Depends(llm_rate_limit(10)),
 ):
     """Ingest a URL or free text and create draft products/services via the LLM."""
     bp = current_user.get("business_profile") or {}
@@ -2230,7 +2405,7 @@ class ResearchIn(BaseModel):
 
 @api.post("/coach/research")
 async def coach_research(payload: ResearchIn,
-                         current_user: Dict[str, Any] = Depends(get_current_user)):
+                         current_user: Dict[str, Any] = Depends(llm_rate_limit(15))):
     """Search the web with Tavily, then have Coach synthesise the findings into actionable insights."""
     results = await _tavily_search(payload.query, max_results=6)
     sources_block = "\n".join(

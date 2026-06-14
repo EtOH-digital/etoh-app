@@ -4,6 +4,7 @@ import * as WebBrowser from "expo-web-browser";
 import * as Linking from "expo-linking";
 
 import { apiFetch, setToken, clearToken, getToken } from "@/src/api/client";
+import { setUser as setSentryUser } from "@/src/lib/sentry";
 
 export type User = {
   user_id: string;
@@ -36,8 +37,14 @@ type AuthCtx = {
 const Ctx = createContext<AuthCtx | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUserRaw] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+
+  // Wrapper so every place we already setUser also tags the Sentry session.
+  const setUser = useCallback((u: User | null) => {
+    setUserRaw(u);
+    setSentryUser(u ? { id: u.user_id, email: u.email } : null);
+  }, []);
 
   const refresh = useCallback(async () => {
     const tok = await getToken();

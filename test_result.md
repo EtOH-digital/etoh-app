@@ -113,30 +113,43 @@ frontend:
     status_history:
       - working: true
         agent: "main"
-        comment: "Rewrote profile.tsx with the SAME sections/options as the onboarding wizard: Métier tiles (10 options w/ emojis), CA radio rows, Objectifs check rows, Produits big chips, Prix/Pays/Canaux small chips. Added debounced (800ms) auto-save on every field change — top of the screen now shows a profile-completion progress bar + 'Enregistré automatiquement' indicator. Added a Claude-Cowork-style 'EtOH a appris automatiquement: …' banner that surfaces what was auto-learned. Implemented backend endpoint POST /api/profile/auto-extract that uses the LLM to extract business info from any chat message (only fills empty fields, never overwrites). Hooked into ChatScreen so every user message in Coach/Studio/Pilot fires the extractor fire-and-forget and shows a transient learning banner. Verified visually + via curl (returned learned_fields: ['target_countries'] from a French free-text message)."
-  - task: "Unified ChatGPT-like UX across Coach / Studio / Pilot (true unification)"
+        comment: "Rewrote profile.tsx with the SAME sections/options as the onboarding wizard."
+  - task: "Sentry frontend integration (Expo + @sentry/react-native v7)"
     implemented: true
     working: true
-    file: "frontend/app/(tabs)/coach.tsx, studio.tsx, pilot.tsx + frontend/src/components/ChatScreen.tsx"
+    file: "frontend/src/lib/sentry.ts, frontend/app/_layout.tsx, frontend/src/auth/AuthContext.tsx, frontend/app.json, frontend/.env"
     stuck_count: 0
     priority: "high"
-    needs_retesting: false
+    needs_retesting: true
     status_history:
       - working: true
         agent: "main"
-        comment: "Refactored into a single shared `ChatScreen` component used by all 3 modules. Same layout (logo header, empty state with title/subtitle, 4 suggestion chips, chat messages, input bar with send) — only the brand color, title, subtitle, suggestions, placeholder and onSend handler differ per module. Coach uses red, Studio uses navy, Pilot uses teal. Studio auto-detects template/tone from message keywords. Pilot keeps email/whatsapp/linkedin action modal but renders prospect cards as extras under the assistant bubble. Verified visually: each module loads, accepts ?prompt= pre-fill, sends a message, and renders the AI reply correctly."
-  - task: "Unified Chat UX + Boost prompt pre-fill (Coach/Studio/Pilot)"
+        comment: "Wired Sentry into the Expo app. initSentry() runs at module load (before SplashScreen.preventAutoHideAsync), DSN from EXPO_PUBLIC_SENTRY_DSN. RootLayout exported via Sentry.wrap. AuthContext now calls setSentryUser on every setUser. Confirmed via browser console: '[Sentry] initialised {env: development}'. App still loads the language picker correctly."
+
+backend:
+  - task: "Sentry backend integration (sentry-sdk[fastapi] + Starlette + logging)"
     implemented: true
     working: true
-    file: "frontend/app/(tabs)/coach.tsx, studio.tsx, pilot.tsx, index.tsx"
+    file: "backend/server.py, backend/core/sentry_init.py, backend/.env"
     stuck_count: 0
     priority: "high"
-    needs_retesting: false
+    needs_retesting: true
     status_history:
       - working: true
         agent: "main"
-        comment: "Verified visually via screenshots. Dashboard 'Boost' on a recommendation routes to the correct module and pre-fills the input. Coach chat input pre-filled. Pilot search bar pre-filled. Studio brief pre-filled (template + tone selectors retained). Fixed missing `Fonts` import in studio.tsx that was breaking the screen."
+        comment: "Added core/sentry_init.py with FastApi+Starlette+Logging integrations. init_sentry() called BEFORE FastAPI() in server.py so the middleware kicks in. SENTRY_DSN read from .env. Filter drops 4xx HTTPException to keep noise low. Confirmed via /api/debug/sentry which raises a RuntimeError and the stderr shows 'Sentry is attempting to send 2 pending events'. Need a Sentry dashboard check to confirm event ingestion + verify user context is attached after login."
+  - task: "Stripe webhook with idempotency + payment_intent.payment_failed handling"
+    implemented: true
+    working: true
+    file: "backend/server.py, backend/.env"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "Switched env to Stripe TEST keys (sk_test_, pk_test_, whsec_). Webhook now mounted at BOTH /api/wallet/webhook (legacy) and /api/stripe/webhook (canonical). Added Mongo collection stripe_events with unique index on event_id (created at startup) for proper idempotency. Handles checkout.session.completed (credits user + marks wallet_checkouts paid) and payment_intent.payment_failed (logs failure code/message). 90-day TTL on stripe_events. Signature verification active with the new whsec_ secret. Need to verify with stripe CLI replay or Dashboard 'Send test event'."
 
 agent_communication:
   - agent: "main"
-    message: "Verified the unified UX & Boost prompt pre-filling across the three modules. Found and fixed a runtime error in studio.tsx (missing Fonts import). All three module screens now load and pre-fill from ?prompt= correctly."
+    message: "P0 progress: Stripe switched to TEST keys + proper webhook with idempotency. Sentry online both frontend and backend (verified locally). Ready for testing_agent to validate: 1) all auth/coach/studio/pilot/hub/crm/wallet endpoints still work after the Sentry middleware insertion, 2) the Stripe webhook accepts a properly-signed event (use a mock checkout.session.completed payload signed with whsec_QVCyl4ZUwgAqGrcVGT72D887khZoLFh5 — see test plan), 3) replay protection via stripe_events.event_id unique index, 4) /api/debug/sentry returns 500 (intentional)."

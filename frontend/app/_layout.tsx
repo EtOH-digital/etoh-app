@@ -9,6 +9,10 @@ import { Lato_400Regular, Lato_700Bold, Lato_900Black } from "@expo-google-fonts
 import { useIconFonts } from "@/src/hooks/use-icon-fonts";
 import { AuthProvider, useAuth } from "@/src/auth/AuthContext";
 import { I18nProvider, useI18n } from "@/src/i18n/I18nContext";
+import { initSentry, Sentry } from "@/src/lib/sentry";
+
+// Initialise Sentry as early as possible (before any other side-effect).
+initSentry();
 
 SplashScreen.preventAutoHideAsync();
 
@@ -58,7 +62,7 @@ function RootNav() {
   );
 }
 
-export default function RootLayout() {
+function RootLayoutInner() {
   const [iconsLoaded, iconsError] = useIconFonts();
   const [brandLoaded] = useExpletus({
     ExpletusSans_400Regular,
@@ -89,3 +93,7 @@ export default function RootLayout() {
     </SafeAreaProvider>
   );
 }
+
+// Wrap the root with Sentry so unhandled JS errors are reported automatically.
+// On web (no DSN configured) or when init failed, `wrap` is essentially a passthrough.
+export default Sentry.wrap(RootLayoutInner);
