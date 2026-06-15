@@ -80,9 +80,9 @@ memory/test_credentials.md
 
 # Mobile development
 android-sdk/
-.env
-.env.*
-*.env
+# .env files are intentionally NOT ignored — Emergent's deploy pipeline needs
+# them in the build context and auto-replaces secrets at deploy time.
+# (.env, .env.*, *.env removed from gitignore on 2026-06-15)
 credentials.json
 *.key
 .credentials
