@@ -29,11 +29,19 @@ _MODEL = None
 
 
 def _get_model():
+    """Lazily load the embedding model.
+
+    We use **fastembed** (ONNX Runtime, ~80 MB RAM) instead of
+    sentence-transformers + torch (~800 MB) so the backend fits inside the
+    1 Gi memory cap of the production container. The underlying model file is
+    the SAME (`paraphrase-multilingual-MiniLM-L12-v2`, 384-d, multilingual),
+    so embeddings remain backwards-compatible with chunks indexed previously.
+    """
     global _MODEL
     if _MODEL is None:
-        from sentence_transformers import SentenceTransformer
-        logger.info("Loading embedding model %s …", EMBEDDING_MODEL_NAME)
-        _MODEL = SentenceTransformer(EMBEDDING_MODEL_NAME)
+        from fastembed import TextEmbedding
+        logger.info("Loading embedding model %s (fastembed/ONNX) …", EMBEDDING_MODEL_NAME)
+        _MODEL = TextEmbedding(model_name=EMBEDDING_MODEL_NAME)
         logger.info("Embedding model loaded (dims=%d).", EMBEDDING_DIMS)
     return _MODEL
 
@@ -120,11 +128,22 @@ def chunk_text(text: str, chunk_size: int = 800, overlap: int = 100) -> List[str
 # Embedding & search
 # ---------------------------------------------------------------------------
 def embed_texts(texts: List[str]) -> List[List[float]]:
-    """Batch-encode texts → list of 384-d float lists."""
+    """Batch-encode texts → list of 384-d float lists (L2-normalized).
+
+    fastembed's TextEmbedding.embed() returns an iterator of numpy arrays.
+    The MiniLM-L12-v2 ONNX model produces *unnormalized* mean-pooled
+    embeddings, so we L2-normalize manually here to keep cosine similarity
+    = dot product (matches the previous sentence-transformers behaviour and
+    keeps the comparison with chunks indexed previously consistent).
+    """
     if not texts:
         return []
     model = _get_model()
-    arr = model.encode(texts, batch_size=32, show_progress_bar=False, normalize_embeddings=True)
+    arr = np.asarray(list(model.embed(texts)), dtype=np.float32)
+    # L2 normalize each row
+    norms = np.linalg.norm(arr, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    arr = arr / norms
     return arr.tolist()
 
 
