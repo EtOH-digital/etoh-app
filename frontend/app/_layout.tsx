@@ -10,6 +10,7 @@ import { useIconFonts } from "@/src/hooks/use-icon-fonts";
 import { AuthProvider, useAuth } from "@/src/auth/AuthContext";
 import { I18nProvider, useI18n } from "@/src/i18n/I18nContext";
 import { initSentry, Sentry } from "@/src/lib/sentry";
+import PWAInstallPrompt from "@/src/components/PWAInstallPrompt";
 
 // Initialise Sentry as early as possible (before any other side-effect).
 initSentry();
@@ -88,6 +89,7 @@ function RootLayoutInner() {
       <I18nProvider>
         <AuthProvider>
           <RootNav />
+          <PWAInstallPrompt />
         </AuthProvider>
       </I18nProvider>
     </SafeAreaProvider>

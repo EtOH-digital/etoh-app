@@ -11,12 +11,34 @@ export default function Root({ children }: PropsWithChildren) {
         <meta name="description" content="EtOH App — Your AI commercial director for wine & spirits." />
         <link rel="icon" type="image/png" href="/assets/assets/images/favicon.png" />
         <link rel="shortcut icon" type="image/png" href="/assets/assets/images/favicon.png" />
-        <link rel="apple-touch-icon" href="/assets/assets/images/favicon.png" />
+        <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
         <meta name="theme-color" content="#2C2D2C" />
+        {/* PWA — install on home screen, standalone mode */}
+        <link rel="manifest" href="/manifest.webmanifest" />
+        <meta name="application-name" content="EtOH AI" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-title" content="EtOH AI" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+        <meta name="mobile-web-app-capable" content="yes" />
+        <meta name="msapplication-TileColor" content="#2C2D2C" />
         <meta httpEquiv="X-UA-Compatible" content="IE=edge" />
         <meta
           name="viewport"
-          content="width=device-width, initial-scale=1, shrink-to-fit=no"
+          content="width=device-width, initial-scale=1, shrink-to-fit=no, viewport-fit=cover"
+        />
+        {/* Service Worker registration (web only, idempotent) */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              if ('serviceWorker' in navigator) {
+                window.addEventListener('load', function () {
+                  navigator.serviceWorker.register('/sw.js').catch(function (err) {
+                    console.warn('[PWA] SW registration failed:', err);
+                  });
+                });
+              }
+            `,
+          }}
         />
         {/*
           Disable body scrolling on web to make ScrollView components work correctly.
